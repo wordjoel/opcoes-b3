@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "User": {
+      "title": "usuário",
+      "description": "Dados do usuário e preferências do terminal",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "theme": { "type": "string", "enum": ["dark", "light"] },
+            "riskProfile": { "type": "string", "enum": ["conservative", "moderate", "aggressive"] }
+          }
+        }
+      },
+      "required": ["uid", "email"]
+    },
+    "Strategy": {
+      "title": "estratégia",
+      "description": "Estratégia de opções salva ou recomendada",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "ticker": { "type": "string" },
+        "type": { "type": "string" },
+        "maxProfit": { "type": "number" },
+        "maxLoss": { "type": "number" },
+        "probability": { "type": "number" },
+        "cost": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["draft", "active", "closed"] }
+      },
+      "required": ["ticker", "type", "userId"]
+    },
+    "Alert": {
+      "title": "alerta",
+      "description": "Alertas de mercado gerados pelos robôs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ticker": { "type": "string" },
+        "message": { "type": "string" },
+        "severity": { "type": "string", "enum": ["info", "warning", "critical"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Perfis de usuários"
+    },
+    "/users/{userId}/strategies/{strategyId}": {
+      "schema": "Strategy",
+      "description": "Estratégias salvas pelo usuário"
+    },
+    "/alerts": {
+      "schema": "Alert",
+      "description": "Alertas globais de mercado"
+    }
+  }
+}
