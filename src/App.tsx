@@ -22,6 +22,17 @@ export default function App() {
   const [strategy, setStrategy] = useState<Strategy | null>(null);
   const [loading, setLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const update = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
+  }, []);
 
   // Robot simulation logic
   useEffect(() => {
@@ -88,6 +99,15 @@ export default function App() {
         </header>
 
         <div className="max-w-[1400px] mx-auto p-4 md:p-8 lg:p-10 space-y-8">
+          <div role="status" className="flex items-start gap-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-sm text-amber-200">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <div>
+              <p><strong>Demonstração:</strong> preços, grade de opções e alertas são fictícios. Não use para operar.</p>
+              {!isOnline && (
+                <p className="mt-1"><strong>Sem conexão:</strong> a análise por IA está indisponível, e a estratégia exibida será apenas um modelo fixo.</p>
+              )}
+            </div>
+          </div>
           <AnimatePresence mode="wait">
             {activeTab === 'dashboard' && (
               <motion.div
