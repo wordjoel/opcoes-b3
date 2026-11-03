@@ -37,4 +37,4 @@ npm run build
 
 ## Publicar
 
-Cadastre as variáveis de `.env.example` no projeto da Vercel, exceto `B3_INSECURE_COOKIE`, e rode `db.migrate` apontando para o Turso antes do deploy.
+Cadastre as variáveis de `.env.example` no projeto da Vercel, exceto `B3_INSECURE_COOKIE`, gere um `CRON_SECRET` aleatório e rode `db.migrate` apontando para o Turso antes do deploy.

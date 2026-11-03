@@ -1,5 +1,6 @@
 """API do B3 Opções Pro. Só leitura e análise: não existe rota de envio de ordens."""
 
+import hmac
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ class Settings:
     brapi_configured: bool
     # Só em desenvolvimento, sem HTTPS.
     insecure_cookie: bool = False
+    # A Vercel o envia no header Authorization ao chamar o cron.
+    cron_secret: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -35,6 +38,7 @@ class Settings:
             session_secret=os.environ.get("SESSION_SECRET"),
             brapi_configured=bool(os.environ.get("BRAPI_API_KEY")),
             insecure_cookie=os.environ.get("B3_INSECURE_COOKIE") == "1",
+            cron_secret=os.environ.get("CRON_SECRET"),
         )
 
     @property
@@ -168,6 +172,26 @@ def create_app(
     @router.get("/scanner", dependencies=protected)
     def get_scanner(db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
         return service.scanner(source, watchlist_symbols(db), now())
+
+    @router.get("/cron/scan")
+    def cron_scan(
+        request: Request, db: Database = Depends(database), source: DataProvider = Depends(provider)
+    ) -> dict:
+        """Varredura diária: aquece o cache e continua o histórico de IV sem depender do app aberto.
+
+        Pode rodar duas vezes sem efeito: amostra já guardada não é buscada de novo.
+        """
+        if not config.cron_secret or len(config.cron_secret) < auth.MIN_SECRET_LENGTH:
+            raise HTTPException(503, "Cron não configurado no servidor")
+        expected = f"Bearer {config.cron_secret}".encode()
+        if not hmac.compare_digest(request.headers.get("authorization", "").encode(), expected):
+            raise HTTPException(401, "Não autorizado")
+        rows = service.scanner(source, watchlist_symbols(db), now())["rows"]
+        return {
+            "symbols": len(rows),
+            "complete": sum(not row["missing"] for row in rows),
+            "iv_samples": sum(row["iv_samples"] for row in rows),
+        }
 
     @router.get("/assets/{symbol}", dependencies=protected)
     def get_asset(symbol: str, source: DataProvider = Depends(provider)) -> dict:

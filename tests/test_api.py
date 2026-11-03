@@ -282,6 +282,39 @@ class TestScanner:
         assert details["GRADE_DEFASADA"] == "Ativo -6,0% desde o pregão da grade."
 
 
+class TestCron:
+    SECRET = "c" * 40
+
+    def client(self, database, cron_secret="c" * 40):
+        settings = Settings(hash_password(PASSWORD), SECRET, True, insecure_cookie=True, cron_secret=cron_secret)
+        return make_client(database, settings=settings)
+
+    def test_runs_with_the_secret_and_needs_no_session(self, database):
+        response = self.client(database).get("/api/cron/scan", headers={"Authorization": f"Bearer {self.SECRET}"})
+        assert response.status_code == 200
+        assert response.json() == {"symbols": 8, "complete": 8, "iv_samples": 416}
+
+    def test_refuses_missing_or_wrong_secret(self, database):
+        client = self.client(database)
+        assert client.get("/api/cron/scan").status_code == 401
+        assert client.get("/api/cron/scan", headers={"Authorization": "Bearer errado"}).status_code == 401
+        assert client.get("/api/cron/scan", headers={"Authorization": self.SECRET}).status_code == 401
+
+    def test_user_session_does_not_open_it(self, database):
+        client = self.client(database)
+        client.cookies.set(COOKIE_NAME, create_session(SECRET, NOW), path="/api")
+        assert client.get("/api/cron/scan").status_code == 401
+
+    def test_unconfigured_or_short_secret_fails_closed(self, database):
+        for secret in (None, "curto"):
+            client = self.client(database, cron_secret=secret)
+            assert client.get("/api/cron/scan", headers={"Authorization": f"Bearer {secret}"}).status_code == 503
+
+    def test_response_has_no_market_data(self, database):
+        response = self.client(database).get("/api/cron/scan", headers={"Authorization": f"Bearer {self.SECRET}"})
+        assert set(response.json()) == {"symbols", "complete", "iv_samples"}
+
+
 class TestIvRankErrors:
     def test_source_limit_keeps_chain_data_and_counts_samples(self, database):
         class Limited(FakeProvider):
