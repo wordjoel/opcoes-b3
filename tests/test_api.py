@@ -297,6 +297,7 @@ class TestCron:
             "complete": 8,
             "iv_samples": 416,
             "scan_complete": True,
+            "b3": {"sessions": [], "bars": 0},
             "lab": {"active": 0, "marked": 0, "closed": 0, "not_reached": 0},
         }
 
@@ -318,7 +319,20 @@ class TestCron:
 
     def test_response_has_no_market_data(self, database):
         response = self.client(database).get("/api/cron/scan", headers={"Authorization": f"Bearer {self.SECRET}"})
-        assert set(response.json()) == {"symbols", "complete", "iv_samples", "scan_complete", "lab"}
+        assert set(response.json()) == {"symbols", "complete", "iv_samples", "scan_complete", "b3", "lab"}
+
+    def test_failed_b3_download_does_not_stop_the_scan(self, database):
+        def failing(_db, _moment):
+            raise DataInsufficientError("B3 indisponível")
+
+        settings = Settings(hash_password(PASSWORD), SECRET, True, insecure_cookie=True, cron_secret="c" * 40)
+        app = create_app(settings, lambda: database, lambda _: FakeProvider(), now=lambda: NOW, market_ingest=failing)
+        response = TestClient(app, base_url="https://testserver").get(
+            "/api/cron/scan", headers={"Authorization": f"Bearer {self.SECRET}"}
+        )
+        assert response.status_code == 200
+        assert response.json()["b3"]["error"] == "B3 indisponível"
+        assert response.json()["symbols"] == 8
 
 
 class TestIvRankErrors:

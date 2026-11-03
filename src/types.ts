@@ -193,6 +193,7 @@ export interface StrategiesView {
   expiry: string;
   market_date: string | null;
   spot: number;
+  source?: string | null;
   live_price: number | null;
   spot_drift: number | null;
   risk_free_rate: number;
@@ -257,7 +258,7 @@ export interface LabAsset {
   symbol: string;
   status: string;
   reason: string | null;
-  liquidity: { usable_series: number; liquid_series: number; calls: number; puts: number; sufficient: boolean } | null;
+  liquidity: { usable_series: number; liquid_series: number; calls: number; puts: number; sufficient: boolean; open_interest_known?: boolean } | null;
   market_date?: string | null;
   expiry?: string;
   source?: string;

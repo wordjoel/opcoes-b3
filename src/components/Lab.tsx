@@ -89,6 +89,11 @@ function Opportunities() {
   return (
     <div className="space-y-4">
       <Panel title="Ativos" className="overflow-x-auto">
+        {data.data.assets.some((asset) => asset.liquidity && asset.liquidity.open_interest_known === false) && (
+          <p role="note" className="mb-2 text-sm text-ink-2">
+            O arquivo oficial da B3 não traz contratos em aberto. A liquidez aqui considera só volume e negócios, e a decisão fica sem aprovação enquanto esse dado faltar.
+          </p>
+        )}
         <table className="np-table min-w-[640px]">
           <thead>
             <tr>

@@ -202,6 +202,13 @@ def _vertical(key: str, name: str, buy: OptionQuote, sell: OptionQuote, lot: int
     )
 
 
+def meets_scan_liquidity(quote: OptionQuote) -> bool:
+    """Contratos em aberto desconhecidos não reprovam a série, mas o limite de volume vale sempre.
+    A decisão final continua sem aprovar: sem esse dado, a nota de liquidez fica "não medida"."""
+    enough_open = quote.open_interest is None or quote.open_interest >= MIN_SCAN_OPEN_INTEREST
+    return (quote.volume or 0) >= MIN_SCAN_VOLUME and enough_open
+
+
 def vertical_scan(quotes: Sequence[OptionQuote], spot: float, t: float, r: float, lot: int = 100) -> list[Candidate]:
     """Varre pares de strikes líquidos e fica, em cada um dos 4 tipos de trava, com o de maior
     valor esperado por real de risco. Só usa dados do pregão recebido."""
@@ -210,8 +217,7 @@ def vertical_scan(quotes: Sequence[OptionQuote], spot: float, t: float, r: float
         for quote in quotes
         if quote.close
         and quote.iv
-        and (quote.volume or 0) >= MIN_SCAN_VOLUME
-        and (quote.open_interest or 0) >= MIN_SCAN_OPEN_INTEREST
+        and meets_scan_liquidity(quote)
         and (quote.trades or 0) >= _SCAN_MIN_TRADES
     ]
     kinds = (

@@ -21,6 +21,8 @@ from quant.risk import CapitalLimits
 from data.normalizer import is_stock_symbol, normalize_symbol
 from data.providers.base import DataProvider
 from data.providers.brapi import BrapiProvider
+from data.providers.composite import SourceChain
+from data.providers.cotahist import SHARED_FILES, CotahistProvider, ingest_recent
 from db.client import Database, DatabaseError
 
 logger = logging.getLogger("B3.API")
@@ -98,17 +100,34 @@ def _valid_symbol(symbol: str) -> str:
     return normalized
 
 
+def default_provider(database: Database) -> DataProvider:
+    """Sem chave da brapi, o mercado vem dos arquivos oficiais da B3, de graça, para qualquer ativo.
+    Com a chave, a brapi vem primeiro e a B3 cobre as falhas. A agenda de eventos só a brapi tem.
+    A cotação tenta sempre a brapi: sem chave, ela ainda responde alguns ativos com preço do dia,
+    e é esse preço que mede quanto o ativo andou desde a grade."""
+    token = os.environ.get("BRAPI_API_KEY")
+    brapi = BrapiProvider(token=token)
+    official = CotahistProvider(database)
+    market = [brapi, official] if token else [official]
+    return CachingProvider(SourceChain(market, events=brapi, quotes=[brapi, official]), database)
+
+
 def create_app(
     settings: Settings | None = None,
     database_factory: Callable[[], Database] | None = None,
     provider_factory: Callable[[Database], DataProvider] | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    market_ingest: Callable[[Database, datetime], dict] | None = None,
 ) -> FastAPI:
     load_local_env()
     config = settings or Settings.from_env()
     make_database = database_factory or Database.from_env
-    make_provider = provider_factory or (
-        lambda database: CachingProvider(BrapiProvider(token=os.environ.get("BRAPI_API_KEY")), database)
+    make_provider = provider_factory or default_provider
+    # Com outra fonte injetada não há arquivo da B3 para guardar.
+    ingest = market_ingest or (
+        (lambda _db, _moment: {"sessions": [], "bars": 0})
+        if provider_factory
+        else (lambda db, moment: ingest_recent(db, SHARED_FILES, moment))
     )
 
     app = FastAPI(title="B3 Opções Pro", docs_url=None, redoc_url=None, openapi_url=None)
@@ -271,6 +290,11 @@ def create_app(
         if not hmac.compare_digest(request.headers.get("authorization", "").encode(), expected):
             raise HTTPException(401, "Não autorizado")
         moment = now()
+        try:
+            ingested = ingest(db, moment)
+        except DataInsufficientError as error:
+            # A varredura ainda aproveita o que já está guardado.
+            ingested = {"sessions": [], "bars": 0, "error": error.detail}
         result = service.scanner(source, watchlist_symbols(db), moment)
         monitored = lab.monitor(source, db, moment, budget_seconds=15.0)
         # Só a cópia temporária da fonte: o histórico de vol nunca é apagado.
@@ -282,6 +306,7 @@ def create_app(
             "complete": sum(not row["missing"] for row in rows),
             "iv_samples": sum(row["iv_samples"] for row in rows),
             "scan_complete": result["complete"],
+            "b3": ingested,
             "lab": {key: monitored[key] for key in ("active", "marked", "closed", "not_reached")},
         }
 

@@ -8,11 +8,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
-from core.clock import market_today
+from core.clock import MARKET_TZ, market_today
 from core.config import DataQualityLimits
 from core.exceptions import DataInsufficientError
 from core.text import decimal_comma
-from core.types import CorporateEvent, MarketRegime, MarketSnapshot, OptionChain, OptionKind, OptionQuote, PriceBar, Provenance
+from core.types import CorporateEvent, MarketRegime, MarketSnapshot, OptionChain, OptionKind, OptionQuote, PriceBar, Provenance, SourceKind
 from data.providers.base import DataProvider
 from data.validators import ValidationReport, validate_bars, validate_chain, validate_snapshot
 from quant.greeks import position_greeks
@@ -110,8 +110,14 @@ def _reference_expiry(expirations: list[date], today: date) -> date | None:
     return min((day for day in expirations if day >= limit), default=None)
 
 
-def _spot_drift(chain: OptionChain, live: MarketSnapshot | None) -> float | None:
+def spot_drift(chain: OptionChain, live: MarketSnapshot | None) -> float | None:
+    """None = não medida. Cotação de fim de dia do mesmo pregão da grade é o próprio preço da grade:
+    daria sempre 0%, escondendo qualquer movimento desde então."""
     if live is None:
+        return None
+    if live.provenance.kind is SourceKind.EOD and chain.market_date and (
+        live.provenance.market_time.astimezone(MARKET_TZ).date() <= chain.market_date
+    ):
         return None
     return live.price / chain.underlying.price - 1
 
@@ -259,7 +265,7 @@ def strategies_view(
     spot, t, r = chain.underlying.price, chain.time_to_expiry_years, chain.risk_free_rate
 
     live = _try_snapshot(provider, symbol)
-    drift = _spot_drift(chain, live)
+    drift = spot_drift(chain, live)
     bars = _try_bars(provider, symbol)
     hv, _ = _volatility(bars)
     atm_iv = _atm_iv(report.usable_quotes, spot)
@@ -335,6 +341,7 @@ def strategies_view(
         "expiry": expiry.isoformat(),
         "market_date": chain.market_date.isoformat() if chain.market_date else None,
         "spot": spot,
+        "source": chain.underlying.provenance.source,
         "live_price": live.price if live else None,
         "spot_drift": drift,
         "risk_free_rate": r,
@@ -465,6 +472,8 @@ def scan_symbol(
         report.require_valid()
         row["historical_volatility"], _ = _volatility(bars)
         row["history_warnings"] = [issue.detail for issue in report.issues if issue.code == "LARGE_JUMP"]
+        if not all(bar.adjusted for bar in bars):
+            row["history_warnings"].append("Histórico oficial da B3, sem ajuste de proventos: a vol histórica pode sair um pouco maior.")
     except DataInsufficientError as error:
         bars = []
         row["missing"].append(f"Histórico: {error.detail}")
@@ -478,7 +487,7 @@ def scan_symbol(
             expiry=expiry.isoformat(),
             market_date=chain.market_date.isoformat() if chain.market_date else None,
             atm_iv=_atm_iv(report.usable_quotes, chain.underlying.price),
-            spot_drift=_spot_drift(chain, live),
+            spot_drift=spot_drift(chain, live),
         )
         if chain.market_date:
             _fill_iv_rank(provider, symbol, chain.market_date, row, stop_at)

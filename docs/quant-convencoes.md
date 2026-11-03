@@ -19,7 +19,7 @@
 
 - **Estilo de exercício:** heatmap e estresse usam árvore binomial nas pernas americanas e Black-Scholes nas europeias. A vol implícita vem da fonte, calculada por ela com Black-Scholes-Merton; gregas e probabilidades continuam europeias, e a análise avisa quando há perna americana. Sem dividendos, a call americana vale o mesmo que a europeia; a fonte informa dividendo 0, então dividendo discreto perto do vencimento não é modelado.
 - **Dividendos:** tratados como taxa contínua `q`. Dividendos discretos perto do vencimento não são modelados.
-- **Taxa de juros:** `r` é obrigatória e não tem valor padrão. Vem da brapi, com a mesma data da grade.
+- **Taxa de juros:** `r` é obrigatória e não tem valor padrão. Vem da brapi ou, na fonte oficial, da meta Selic do Banco Central (SGS 432), a mesma taxa que a brapi informa; sempre com a data da grade.
 - **Calendário:** `t` é responsabilidade de quem chama. Ainda não há calendário de feriados da B3.
 - **Volatilidade constante:** cada cálculo usa uma só `sigma`, sem superfície de volatilidade.
 - **Probabilidade de lucro:** é neutra ao risco e lognormal. Mostra o que os parâmetros implicam, não uma previsão, e não é certeza.

@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from app.service import _try_bars, _regime
-from core.clock import market_today
+from app.service import _try_bars, _regime, spot_drift
+from core.clock import grid_still_current, market_today
 from core.exceptions import DataInsufficientError
 from core.types import LegAction, OptionChain, OptionKind, OptionLeg
 from data.providers.base import DataProvider
@@ -23,8 +23,7 @@ from quant.lab import (
     book_max_loss,
     book_pnl,
     MIN_LIQUID_SERIES,
-    MIN_SCAN_OPEN_INTEREST,
-    MIN_SCAN_VOLUME,
+    meets_scan_liquidity,
     evaluate_path,
     expected_pnl,
     mark_pnl,
@@ -108,17 +107,14 @@ def _chain_times(chain: OptionChain) -> tuple[float, float]:
 
 
 def _liquidity(report: ValidationReport) -> dict:
-    liquid = [
-        quote
-        for quote in report.usable_quotes
-        if (quote.volume or 0) >= MIN_SCAN_VOLUME and (quote.open_interest or 0) >= MIN_SCAN_OPEN_INTEREST
-    ]
+    liquid = [quote for quote in report.usable_quotes if meets_scan_liquidity(quote)]
     return {
         "usable_series": len(report.usable_quotes),
         "liquid_series": len(liquid),
         "calls": sum(quote.kind is OptionKind.CALL for quote in liquid),
         "puts": sum(quote.kind is OptionKind.PUT for quote in liquid),
         "sufficient": len(liquid) >= MIN_LIQUID_SERIES,
+        "open_interest_known": any(quote.open_interest is not None for quote in report.usable_quotes),
     }
 
 
@@ -159,8 +155,7 @@ def discover(
             }
         )
         try:
-            live = provider.get_market_snapshot(symbol)
-            drift = live.price / chain.underlying.price - 1
+            drift = spot_drift(chain, provider.get_market_snapshot(symbol))
         except DataInsufficientError:
             drift = None
         spot = chain.underlying.price
@@ -274,9 +269,15 @@ def start_forward(provider: DataProvider, db: Database, symbol: str, agent: str,
         raise DataInsufficientError("grade sem data de pregão")
     spot = chain.underlying.price
     live = provider.get_market_snapshot(symbol)
-    drift = live.price / spot - 1
+    drift = spot_drift(chain, live)
     # Entrar por um preço velho com o ativo já longe daria uma vantagem que não existiu.
-    if abs(drift) > limits.max_spot_drift:
+    if drift is None:
+        if not grid_still_current(chain.market_date, now):
+            raise DataInsufficientError(
+                "sem cotação do dia para medir quanto o ativo andou desde a grade: "
+                "a entrada volta a ser aceita com a grade do próximo pregão, publicada por volta das 21h"
+            )
+    elif abs(drift) > limits.max_spot_drift:
         raise DataInsufficientError(f"grade defasada: o ativo já se moveu {drift:+.1%} desde o pregão da grade")
     candidate = next((item for item in agent_proposals(agent, chain, report.usable_quotes, t, r) if item.key == key), None)
     if candidate is None or candidate.proposal.max_loss is None:

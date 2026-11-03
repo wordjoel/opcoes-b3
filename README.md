@@ -45,3 +45,5 @@ Em um terminal próprio, na pasta do projeto, rode `.venv/Scripts/python -m scri
 3. `npx vercel deploy --prod` publica.
 
 Migrations não rodam sozinhas: `.venv/Scripts/python -m db.migrate`. Para voltar ao deploy anterior: `npx vercel rollback`.
+
+Fontes de mercado e limites: [docs/fontes-de-dados.md](docs/fontes-de-dados.md). O app funciona sem custo com os arquivos oficiais da B3; a chave da brapi é opcional e acrescenta contratos em aberto e eventos.
