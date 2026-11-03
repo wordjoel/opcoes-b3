@@ -3,6 +3,7 @@ const MENU = [
   { id: 'scanner', label: 'Scanner B3' },
   { id: 'strategy', label: 'Estratégias' },
   { id: 'alerts', label: 'Alertas' },
+  { id: 'lab', label: 'Laboratório' },
 ];
 
 interface MastheadProps {

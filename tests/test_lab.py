@@ -125,8 +125,18 @@ class TestMath:
 
 
 class TestRanking:
-    def row(self, agent, value, symbol="PETR4", horizon=5, regime="BULL"):
-        return {"agent": agent, "return_on_risk": value, "max_risk_brl": 100.0, "symbol": symbol, "horizon_days": horizon, "regime": regime}
+    counter = 0
+
+    def row(self, agent, value, symbol="PETR4", horizon=5, regime="BULL", entry_day=None):
+        TestRanking.counter += 1
+        day = entry_day or f"data-{TestRanking.counter}"
+        return {"agent": agent, "return_on_risk": value, "max_risk_brl": 100.0, "symbol": symbol, "horizon_days": horizon, "regime": regime, "entry_day": day}
+
+    def test_many_strategies_on_few_dates_get_no_position(self):
+        rows = [self.row("correlacionado", 0.5, entry_day=f"d{index % 16}") for index in range(96)]
+        item = rank_groups(rows, "agent")[0]
+        assert item["count"] == 96 and item["entry_dates"] == 16
+        assert item["position"] is None and not item["sufficient_sample"]
 
     def test_one_exceptional_trade_does_not_win(self):
         lucky = [self.row("sorte", 50.0)] + [self.row("sorte", -0.5) for _ in range(24)]
@@ -164,6 +174,28 @@ class TestVerticalScan:
         chain = history_chain("TEST4", EXPIRY, date(2026, 11, 3), 40.0, model_price)
         thin = [quote.model_copy(update={"open_interest": 5}) for quote in chain.quotes]
         assert vertical_scan(thin, 40.0, 0.15, 0.1) == []
+
+    def test_stale_close_is_not_selected_as_near_zero_risk(self):
+        """Caso real do backtest: uma perna com preço velho fazia o risco parecer quase zero."""
+        chain = history_chain("TEST4", EXPIRY, date(2026, 11, 3), 40.0, model_price)
+        stale = "TC42"
+        quotes = [
+            quote.model_copy(update={"close": next(q.close for q in chain.quotes if q.symbol == "TC40"), "iv": 0.9}) if quote.symbol == stale else quote
+            for quote in chain.quotes
+        ]
+        for item in vertical_scan(quotes, 40.0, 0.15, 0.1):
+            assert stale not in {leg_.symbol for leg_ in item.proposal.legs}
+            width = abs(item.proposal.legs[0].strike - item.proposal.legs[1].strike) * 100
+            assert item.proposal.max_loss >= width * 0.10 and item.proposal.max_profit >= width * 0.10
+
+    def test_equal_prices_with_tiny_risk_are_refused(self):
+        chain = history_chain("TEST4", EXPIRY, date(2026, 11, 3), 40.0, model_price)
+        flat = [quote.model_copy(update={"close": 1.0}) for quote in chain.quotes]
+        assert vertical_scan(flat, 40.0, 0.15, 0.1) == []
+
+    def test_few_trades_are_ignored(self):
+        chain = history_chain("TEST4", EXPIRY, date(2026, 11, 3), 40.0, model_price)
+        assert vertical_scan([q.model_copy(update={"trades": 2}) for q in chain.quotes], 40.0, 0.15, 0.1) == []
 
     def test_impossible_prices_are_not_presented_as_free_profit(self):
         chain = history_chain("TEST4", EXPIRY, date(2026, 11, 3), 40.0, lambda kind, strike, spot: 1.0)

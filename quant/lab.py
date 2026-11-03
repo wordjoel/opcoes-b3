@@ -18,14 +18,20 @@ from core.types import LegAction, OptionKind, OptionLeg, OptionQuote, StrategyPr
 from quant.payoff import analyze_payoff, position_pnl
 from quant.strategies import Candidate, PriceBasis, execution_price
 
-# Abaixo disto, a média e a taxa de acerto dizem pouco: o agente aparece sem posição no ranking.
-MIN_RANKED_SAMPLE = 20
+# Estratégias da mesma data se movem juntas: a amostra que conta é o número de datas de entrada.
+MIN_RANKED_ENTRIES = 20
 # Em opções: 50 e 100 contratos de 100 opções, como na seleção por delta.
 MIN_SCAN_VOLUME = 5_000
 MIN_SCAN_OPEN_INTEREST = 10_000
 # Abaixo disto, o ativo não tem séries suficientes para estruturas confiáveis.
 MIN_LIQUID_SERIES = 4
 _SCAN_MAX_WIDTH = 0.15
+# Fechamentos não são simultâneos. Sem estes filtros, escolher o maior valor esperado seleciona
+# justamente pernas com preço velho, que parecem risco quase zero (medido no backtest de 03/11/2026).
+_SCAN_MAX_IV_GAP = 0.05
+_SCAN_MIN_TRADES = 3
+# Ganho e perda máximos precisam ser ao menos esta fração da largura entre os strikes.
+_SCAN_MIN_WIDTH_SHARE = 0.10
 
 
 @dataclass(frozen=True)
@@ -133,7 +139,10 @@ def _vertical(key: str, name: str, buy: OptionQuote, sell: OptionQuote, lot: int
     ]
     payoff = analyze_payoff(legs)
     # Preços não simultâneos podem sugerir arbitragem: fora, em vez de parecer lucro garantido.
-    if payoff.max_loss is None or payoff.max_loss <= 0 or payoff.max_profit is None or payoff.max_profit <= 0:
+    if payoff.max_loss is None or payoff.max_profit is None:
+        return None
+    minimum = abs(buy.strike - sell.strike) * lot * _SCAN_MIN_WIDTH_SHARE
+    if payoff.max_loss < minimum or payoff.max_profit < minimum:
         return None
     return Candidate(
         key=key,
@@ -158,7 +167,11 @@ def vertical_scan(quotes: Sequence[OptionQuote], spot: float, t: float, r: float
     pool = [
         quote
         for quote in quotes
-        if quote.close and quote.iv and (quote.volume or 0) >= MIN_SCAN_VOLUME and (quote.open_interest or 0) >= MIN_SCAN_OPEN_INTEREST
+        if quote.close
+        and quote.iv
+        and (quote.volume or 0) >= MIN_SCAN_VOLUME
+        and (quote.open_interest or 0) >= MIN_SCAN_OPEN_INTEREST
+        and (quote.trades or 0) >= _SCAN_MIN_TRADES
     ]
     kinds = (
         ("varredura_alta_call", "Trava de alta com call (varredura)", OptionKind.CALL, "low_buy", "Melhor par de calls para alta."),
@@ -174,6 +187,8 @@ def vertical_scan(quotes: Sequence[OptionQuote], spot: float, t: float, r: float
             for high in series[index + 1 :]:
                 if (high.strike - low.strike) / spot > _SCAN_MAX_WIDTH:
                     break
+                if abs(low.iv - high.iv) > _SCAN_MAX_IV_GAP:
+                    continue
                 buy, sell = (low, high) if side == "low_buy" else (high, low)
                 candidate = _vertical(key, name, buy, sell, lot, rationale)
                 if candidate is None:
@@ -207,8 +222,9 @@ def _stats(values: list[float]) -> dict:
 
 def rank_groups(rows: Sequence[Mapping], key: str) -> list[dict]:
     """Ordena pela mediana do retorno sobre o risco, não pela média: uma operação excepcional
-    não sobe o grupo. Grupo com amostra pequena fica sem posição."""
+    não sobe o grupo. Grupo com poucas datas de entrada fica sem posição."""
     groups: dict[str, _Group] = {}
+    entries: dict[str, set[str]] = {}
     breakdowns: dict[str, dict[str, dict[str, list[float]]]] = {}
     for row in rows:
         value = row["return_on_risk"]
@@ -217,6 +233,7 @@ def rank_groups(rows: Sequence[Mapping], key: str) -> list[dict]:
         name = row[key]
         groups.setdefault(name, _Group()).returns.append(value)
         groups[name].risks.append(row["max_risk_brl"])
+        entries.setdefault(name, set()).add(row["entry_day"])
         slot = breakdowns.setdefault(name, {"symbol": {}, "horizon": {}, "regime": {}})
         slot["symbol"].setdefault(row["symbol"], []).append(value)
         slot["horizon"].setdefault(str(row["horizon_days"]), []).append(value)
@@ -230,7 +247,8 @@ def rank_groups(rows: Sequence[Mapping], key: str) -> list[dict]:
                 key: name,
                 **stats,
                 "mean_risk_brl": mean(group.risks),
-                "sufficient_sample": stats["count"] >= MIN_RANKED_SAMPLE,
+                "entry_dates": len(entries[name]),
+                "sufficient_sample": len(entries[name]) >= MIN_RANKED_ENTRIES,
                 "by_symbol": {k: _stats(v) for k, v in breakdowns[name]["symbol"].items()},
                 "by_horizon": {k: _stats(v) for k, v in breakdowns[name]["horizon"].items()},
                 "by_regime": {k: _stats(v) for k, v in breakdowns[name]["regime"].items()},

@@ -214,3 +214,111 @@ export interface StrategiesView {
   candidates: Candidate[];
   unavailable: { key: string; name: string; reason: string }[];
 }
+
+export interface LabLeg {
+  symbol: string;
+  action: 'BUY' | 'SELL';
+  kind: 'CALL' | 'PUT';
+  strike: number;
+  expiry: string;
+  quantity: number;
+  premium: number;
+  bid?: number | null;
+  ask?: number | null;
+  volume?: number | null;
+  open_interest?: number | null;
+  iv?: number | null;
+  style?: string | null;
+}
+
+export interface LabOpportunity {
+  agent: string;
+  agent_name: string;
+  key: string;
+  name: string;
+  symbol: string;
+  expiry: string;
+  market_date: string | null;
+  days_to_expiry: number;
+  legs: LabLeg[];
+  net_premium: number;
+  max_profit: number | null;
+  max_loss: number;
+  breakevens: number[];
+  risk_reward: number | null;
+  probability_of_profit: number | null;
+  potential_return: number | null;
+  theoretical_return: number | null;
+  liquidity_score: number;
+  decision: Candidate['decision'];
+}
+
+export interface LabAsset {
+  symbol: string;
+  status: string;
+  reason: string | null;
+  liquidity: { usable_series: number; liquid_series: number; calls: number; puts: number; sufficient: boolean } | null;
+  market_date?: string | null;
+  expiry?: string;
+  source?: string;
+}
+
+export interface LabMark {
+  day: string;
+  pnl_brl: number | null;
+  spot: number | null;
+  prices: Record<string, number>;
+  complete: boolean;
+  settlement: boolean;
+  source: string;
+  fetched_at: string;
+}
+
+export interface LabStrategy {
+  id: string;
+  mode: 'FORWARD' | 'BACKTEST';
+  agent: string;
+  agent_name: string;
+  symbol: string;
+  structure_name: string;
+  expiry: string;
+  entry_day: string;
+  end_day: string;
+  capital_brl: number;
+  lots: number;
+  regime: string | null;
+  target_pct: number | null;
+  stop_pct: number | null;
+  cost_brl: number;
+  cost_informed: number;
+  status: 'ATIVA' | 'ENCERRADA';
+  close_reason: string | null;
+  source: string;
+  legs: LabLeg[];
+  employed_brl: number;
+  max_risk_brl: number;
+  returns: { potential: number | null; theoretical: number | null; measured_label: 'SIMULADO' | 'OBSERVADO'; measured: number | null };
+  pnl_brl: number | null;
+  return_on_capital: number | null;
+  return_on_employed: number | null;
+  return_on_risk: number | null;
+  best_brl: number | null;
+  worst_brl: number | null;
+  max_drawdown_brl: number;
+  days_to_target: number | null;
+  marks?: LabMark[];
+}
+
+export interface LabRankingRow {
+  agent?: string;
+  agent_name?: string;
+  structure_name?: string;
+  count: number;
+  hit_rate: number;
+  mean_return: number;
+  median_return: number;
+  std_return: number;
+  best_return: number;
+  worst_return: number;
+  position: number | null;
+}

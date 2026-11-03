@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AssetOverview, ChainView, Profile, ScannerResponse, StrategiesView } from '../types';
+import { AssetOverview, ChainView, LabAsset, LabOpportunity, LabRankingRow, LabStrategy, Profile, ScannerResponse, StrategiesView } from '../types';
 
 export class ApiError extends Error {
   constructor(
@@ -52,6 +52,24 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ capital_brl, max_loss_pct }),
     }),
+  labOpportunities: () => request<{ generated_at: string; assets: LabAsset[]; opportunities: LabOpportunity[] }>('/lab/opportunities'),
+  labStart: (body: {
+    symbol: string;
+    agent: string;
+    key: string;
+    capital_brl: number;
+    period_days: number;
+    target_pct: number | null;
+    stop_pct: number | null;
+    cost_brl: number | null;
+  }) => request<{ id: string; created: boolean; entry_day: string; end_day: string }>('/lab/strategies', post(body)),
+  labStrategies: (mode: 'FORWARD' | 'BACKTEST') => request<{ strategies: LabStrategy[] }>(`/lab/strategies?mode=${mode}`),
+  labStrategy: (id: string) => request<LabStrategy>(`/lab/strategies/${encodeURIComponent(id)}`),
+  labMonitor: () => request<{ active: number; marked: number; closed: number; failed: { id: string; reason: string }[]; not_reached: number }>('/lab/monitor', post()),
+  labBacktest: (body: { symbol: string; capital_brl: number; period_days: number; weeks: number }) =>
+    request<{ entries: number; created: number; closed: number; skipped: { entry: string; reason: string }[]; complete: boolean; symbol: string }>('/lab/backtests', post(body)),
+  labRanking: (mode: 'FORWARD' | 'BACKTEST') =>
+    request<{ mode: string; label: string; closed: number; agents: LabRankingRow[]; structures: LabRankingRow[] }>(`/lab/ranking?mode=${mode}`),
   addSymbol: (symbol: string) => request<{ symbols: string[] }>('/watchlist', post({ symbol })),
   removeSymbol: (symbol: string) =>
     request<{ symbols: string[] }>(`/watchlist/${encodeURIComponent(symbol)}`, { method: 'DELETE' }),

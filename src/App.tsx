@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { Alerts, alertCount } from './components/Alerts';
 import { ErrorNotice, Loading } from './components/Common';
 import { Dashboard } from './components/Dashboard';
+import { Lab } from './components/Lab';
 import { Login } from './components/Login';
 import { Masthead } from './components/Masthead';
 import { Scanner } from './components/Scanner';
@@ -85,6 +86,7 @@ function Workspace({ onLogout }: { onLogout: () => void }) {
         )}
         {scanner.data && activeTab === 'strategy' && <StrategyView symbols={symbols} symbol={selected} onSymbol={setSelected} />}
         {scanner.data && activeTab === 'alerts' && <Alerts rows={rows} onOpenStrategies={openStrategies} />}
+        {activeTab === 'lab' && <Lab />}
       </main>
     </div>
   );
