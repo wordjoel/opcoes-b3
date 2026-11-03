@@ -3,14 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Menu, Zap } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Alerts, alertCount } from './components/Alerts';
 import { ErrorNotice, Loading } from './components/Common';
 import { Dashboard } from './components/Dashboard';
 import { Login } from './components/Login';
+import { Masthead } from './components/Masthead';
 import { Scanner } from './components/Scanner';
-import { Sidebar } from './components/Sidebar';
 import { StrategyView } from './components/StrategyView';
 import { api, ApiError, setUnauthorizedHandler, useResource } from './services/api';
 
@@ -32,7 +31,7 @@ export default function App() {
 
   if (failure) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-slate-950">
+      <div className="min-h-screen p-4 md:p-8 max-w-3xl mx-auto">
         <ErrorNotice error={failure} onRetry={check} />
       </div>
     );
@@ -45,7 +44,6 @@ export default function App() {
 function Workspace({ onLogout }: { onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selected, setSelected] = useState<string | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const scanner = useResource('scanner', api.scanner);
   const rows = scanner.data?.rows ?? [];
@@ -65,45 +63,28 @@ function Workspace({ onLogout }: { onLogout: () => void }) {
   };
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-200 overflow-hidden font-sans">
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        isOpen={isSidebarOpen}
-        setIsOpen={setIsSidebarOpen}
-        alertCount={alertCount(rows)}
-        onLogout={onLogout}
-      />
-      <main className="flex-1 relative overflow-y-auto min-w-0">
-        <header className="lg:hidden sticky top-0 z-30 flex items-center justify-between p-4 bg-slate-950/90 border-b border-slate-800">
-          <div className="flex items-center gap-2 text-sky-400">
-            <Zap className="w-5 h-5" />
-            <span className="font-bold tracking-tight">B3 Pro</span>
-          </div>
-          <button aria-label="Abrir menu" onClick={() => setIsSidebarOpen(true)} className="p-2 rounded-lg bg-slate-900 border border-slate-800">
-            <Menu className="w-5 h-5 text-slate-300" />
-          </button>
-        </header>
+    <div className="max-w-[1400px] mx-auto p-4 md:p-8 space-y-6">
+      <Masthead activeTab={activeTab} setActiveTab={setActiveTab} alertCount={alertCount(rows)} onLogout={onLogout} />
+      <main className="space-y-6 min-w-0">
+        {scanner.loading && !scanner.data && <Loading label="Consultando a fonte de dados..." />}
+        {scanner.error && <ErrorNotice error={scanner.error} onRetry={scanner.reload} />}
 
-        <div className="max-w-[1400px] mx-auto p-4 md:p-8 space-y-6">
-          {scanner.loading && !scanner.data && <Loading label="Consultando a fonte de dados..." />}
-          {scanner.error && <ErrorNotice error={scanner.error} onRetry={scanner.reload} />}
-
-          {scanner.data && activeTab === 'dashboard' && (
-            <Dashboard rows={rows} selected={selected} onSelect={setSelected} onOpenStrategies={openStrategies} />
-          )}
-          {scanner.data && activeTab === 'scanner' && (
-            <Scanner
-              rows={rows}
-              generatedAt={scanner.data.generated_at}
-              loading={scanner.loading}
-              onReload={scanner.reload}
-              onOpenStrategies={openStrategies}
-            />
-          )}
-          {scanner.data && activeTab === 'strategy' && <StrategyView symbols={symbols} symbol={selected} onSymbol={setSelected} />}
-          {scanner.data && activeTab === 'alerts' && <Alerts rows={rows} onOpenStrategies={openStrategies} />}
-        </div>
+        {scanner.data && activeTab === 'dashboard' && (
+          <Dashboard rows={rows} selected={selected} onSelect={setSelected} onOpenStrategies={openStrategies} />
+        )}
+        {scanner.data && activeTab === 'scanner' && (
+          <Scanner
+            rows={rows}
+            generatedAt={scanner.data.generated_at}
+            complete={scanner.data.complete}
+            timedOut={scanner.data.timed_out_symbols}
+            loading={scanner.loading}
+            onReload={scanner.reload}
+            onOpenStrategies={openStrategies}
+          />
+        )}
+        {scanner.data && activeTab === 'strategy' && <StrategyView symbols={symbols} symbol={selected} onSymbol={setSelected} />}
+        {scanner.data && activeTab === 'alerts' && <Alerts rows={rows} onOpenStrategies={openStrategies} />}
       </main>
     </div>
   );

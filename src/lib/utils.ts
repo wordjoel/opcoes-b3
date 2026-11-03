@@ -63,6 +63,12 @@ export function formatMoment(moment: string | null | undefined) {
   });
 }
 
+/** Data em São Paulo, daqui a `offsetDays`, como "2026-11-17". */
+export function saoPauloDate(offsetDays = 0) {
+  const moment = new Date(Date.now() + offsetDays * 86_400_000);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(moment);
+}
+
 export const TREND_LABEL = { UP: 'Alta', DOWN: 'Baixa' } as const;
 
 export const REGIME_LABEL: Record<Regime, string> = {

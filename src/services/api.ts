@@ -45,6 +45,13 @@ export const api = {
   session: () => request<{ authenticated: boolean; login_ready: boolean }>('/session'),
   login: (password: string) => request<{ authenticated: boolean }>('/login', post({ password })),
   logout: () => request<{ authenticated: boolean }>('/logout', post()),
+  riskSettings: () =>
+    request<{ capital_brl: number | null; max_loss_pct: number | null; updated_at: string | null }>('/settings/risk'),
+  saveRiskSettings: (capital_brl: number, max_loss_pct: number) =>
+    request<{ capital_brl: number; max_loss_pct: number; updated_at: string }>('/settings/risk', {
+      method: 'PUT',
+      body: JSON.stringify({ capital_brl, max_loss_pct }),
+    }),
   addSymbol: (symbol: string) => request<{ symbols: string[] }>('/watchlist', post({ symbol })),
   removeSymbol: (symbol: string) =>
     request<{ symbols: string[] }>(`/watchlist/${encodeURIComponent(symbol)}`, { method: 'DELETE' }),

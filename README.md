@@ -32,6 +32,7 @@ Abra http://127.0.0.1:3000. Sem `BRAPI_API_KEY`, só a PETR4 tem grade de opçõ
 ```
 .venv/Scripts/python -m pytest
 npm run lint
+npm test
 npm run build
 ```
 

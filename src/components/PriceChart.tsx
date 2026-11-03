@@ -6,6 +6,12 @@ import { formatDay, formatRatio } from '../lib/utils';
 
 type Bars = AssetOverview['history'];
 
+const INK = '#191916';
+const PAPER = '#f3efe5';
+const ACCENT = '#a3231d';
+const SECONDARY = '#494843';
+const RULE = '#9b978e';
+
 export function PriceChart({ bars, structure }: { bars: Bars; structure: MarketStructure | null }) {
   const container = useRef<HTMLDivElement>(null);
 
@@ -13,18 +19,21 @@ export function PriceChart({ bars, structure }: { bars: Bars; structure: MarketS
     if (!container.current) return;
     const chart = createChart(container.current, {
       autoSize: true,
-      layout: { background: { color: 'transparent' }, textColor: '#94A3B8', fontSize: 12 },
-      grid: { vertLines: { visible: false }, horzLines: { color: '#1E293B' } },
+      layout: { background: { color: 'transparent' }, textColor: SECONDARY, fontSize: 12, fontFamily: 'Source Serif 4, Georgia, serif' },
+      grid: { vertLines: { visible: false }, horzLines: { color: '#d9d4c8' } },
       rightPriceScale: { borderVisible: false },
       timeScale: { borderVisible: false },
       localization: { locale: 'pt-BR' },
     });
+    // Candle de alta vazado e de baixa cheio: a leitura não depende de cor.
     const candles = chart.addSeries(CandlestickSeries, {
-      upColor: '#10B981',
-      downColor: '#EF4444',
-      wickUpColor: '#10B981',
-      wickDownColor: '#EF4444',
-      borderVisible: false,
+      upColor: PAPER,
+      downColor: INK,
+      wickUpColor: INK,
+      wickDownColor: INK,
+      borderVisible: true,
+      borderUpColor: INK,
+      borderDownColor: INK,
     });
     candles.setData(bars.map((bar) => ({ time: bar.day, open: bar.open, high: bar.high, low: bar.low, close: bar.close })));
     if (structure) {
@@ -34,20 +43,20 @@ export function PriceChart({ bars, structure }: { bars: Bars; structure: MarketS
           time: event.day,
           position: event.direction === 'UP' ? ('belowBar' as const) : ('aboveBar' as const),
           shape: event.direction === 'UP' ? ('arrowUp' as const) : ('arrowDown' as const),
-          color: '#E2E8F0',
+          color: ACCENT,
           text: event.kind === 'CHOCH' ? 'CHoCH' : 'BOS',
         })),
       );
       const level = (price: number | null, title: string) => {
         if (price !== null) {
-          candles.createPriceLine({ price, title, color: '#64748B', lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true });
+          candles.createPriceLine({ price, title, color: SECONDARY, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: true });
         }
       };
       level(structure.last_swing_high, 'Topo');
       level(structure.last_swing_low, 'Fundo');
     }
 
-    const band = { color: '#94A3B8', lineWidth: 1, priceLineVisible: false, lastValueVisible: false } as const;
+    const band = { color: RULE, lineWidth: 1, priceLineVisible: false, lastValueVisible: false } as const;
     const line = (pick: (bar: Bars[number]) => number | null, style: LineStyle) =>
       chart.addSeries(LineSeries, { ...band, lineStyle: style }).setData(
         bars.flatMap((bar) => {
@@ -65,10 +74,10 @@ export function PriceChart({ bars, structure }: { bars: Bars; structure: MarketS
   return (
     <div>
       <div ref={container} className="h-[320px]" />
-      <p className="flex flex-wrap gap-4 text-xs text-slate-400 mt-2">
-        <span>Candle diário, preço ajustado</span>
+      <p className="flex flex-wrap gap-x-4 gap-y-1 font-display text-xs text-ink-2 mt-2">
+        <span>Candle diário, preço ajustado: vazado sobe, cheio cai</span>
         <span className="flex items-center gap-1.5">
-          <span aria-hidden className="w-4 border-t border-dashed border-slate-400" /> Bollinger de 20 dias e 2 desvios
+          <span aria-hidden className="w-4 border-t border-dashed border-rule" /> Bollinger de 20 dias e 2 desvios
         </span>
         <span>BOS: rompeu a favor da tendência. CHoCH: rompeu contra. Leitura de barras diárias.</span>
       </p>
@@ -80,15 +89,15 @@ export function HvChart({ bars }: { bars: Bars }) {
   const data = bars.filter((bar) => bar.hv_20d !== null);
   if (data.length === 0) return null;
   return (
-    <div className="mt-6">
-      <h4 className="text-sm font-bold text-white mb-2">Volatilidade histórica de 20 dias</h4>
+    <div className="np-rule pt-3">
+      <h4 className="text-base mb-2">Volatilidade histórica de 20 dias</h4>
       <div className="h-[140px]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid stroke="#1E293B" vertical={false} />
+            <CartesianGrid stroke="#d9d4c8" vertical={false} />
             <XAxis
               dataKey="day"
-              stroke="#64748B"
+              stroke={SECONDARY}
               fontSize={12}
               tickLine={false}
               axisLine={false}
@@ -96,7 +105,7 @@ export function HvChart({ bars }: { bars: Bars }) {
               tickFormatter={(day: string) => formatDay(day).slice(0, 5)}
             />
             <YAxis
-              stroke="#64748B"
+              stroke={SECONDARY}
               fontSize={12}
               tickLine={false}
               axisLine={false}
@@ -104,13 +113,13 @@ export function HvChart({ bars }: { bars: Bars }) {
               tickFormatter={(value: number) => formatRatio(value, 0)}
             />
             <Tooltip
-              contentStyle={{ backgroundColor: '#0F172A', border: '1px solid #334155', borderRadius: 8 }}
-              labelStyle={{ color: '#CBD5E1' }}
-              itemStyle={{ color: '#F8FAFC' }}
+              contentStyle={{ backgroundColor: PAPER, border: `1px solid ${INK}`, borderRadius: 0 }}
+              labelStyle={{ color: SECONDARY }}
+              itemStyle={{ color: INK }}
               labelFormatter={(day) => formatDay(String(day))}
               formatter={(value) => [formatRatio(Number(value)), 'Vol 20 dias']}
             />
-            <Line type="linear" dataKey="hv_20d" stroke="#0284C7" strokeWidth={2} dot={false} isAnimationActive={false} />
+            <Line type="linear" dataKey="hv_20d" stroke={INK} strokeWidth={2} dot={false} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>

@@ -14,6 +14,9 @@ export interface Quality {
   issues: { code: string; severity: 'WARNING' | 'ERROR'; detail: string }[];
 }
 
+export type DataStatus = 'REAL' | 'ATRASADO' | 'INCOMPLETO' | 'INDISPONIVEL';
+export type DecisionStatus = 'APROVADA' | 'REPROVADA' | 'INCOMPLETA';
+
 export type Profile = 'CONSERVATIVE' | 'MODERATE' | 'AGGRESSIVE';
 
 export interface MarketStructure {
@@ -54,6 +57,8 @@ export interface ScannerRow {
   iv_samples_needed: number;
   structure_trend: 'UP' | 'DOWN' | null;
   events: CorporateEvent[];
+  source: string | null;
+  data_status: DataStatus;
   missing: string[];
   history_warnings: string[];
   signals: Signal[];
@@ -61,6 +66,9 @@ export interface ScannerRow {
 
 export interface ScannerResponse {
   generated_at: string;
+  complete: boolean;
+  incomplete_symbols: string[];
+  timed_out_symbols: string[];
   rows: ScannerRow[];
 }
 
@@ -74,6 +82,7 @@ export interface AssetOverview {
     provenance: Provenance;
   };
   quote_quality: Quality;
+  data_status: DataStatus;
   history_quality: Quality;
   historical_volatility: number | null;
   ewma_volatility: number | null;
@@ -154,6 +163,7 @@ export interface Candidate {
     price_basis: 'BOOK' | 'CLOSE';
     iv: number | null;
     delta: number | null;
+    style: 'AMERICAN' | 'EUROPEAN' | null;
     probability_itm: number | null;
   }[];
   risk: {
@@ -166,6 +176,16 @@ export interface Candidate {
   };
   payoff: { price: number; pnl: number }[];
   heatmap: { spot_shocks: number[]; vol_shocks: number[]; pnl: number[][] } | null;
+  decision: {
+    status: DecisionStatus;
+    reasons: string[];
+    missing: string[];
+    capital_required: number | null;
+    max_risk: number | null;
+    max_risk_pct: number | null;
+    limit_brl: number | null;
+    risk_reward: number | null;
+  };
 }
 
 export interface StrategiesView {
@@ -182,6 +202,7 @@ export interface StrategiesView {
   iv_ratio: number | null;
   regime: Regime | null;
   profile: Profile | null;
+  capital_configured: boolean;
   iv_rank: number | null;
   iv_percentile: number | null;
   iv_samples: number;
