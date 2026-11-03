@@ -45,6 +45,8 @@ class MarketRegime(str, Enum):
 class SourceKind(str, Enum):
     LIVE = "LIVE"
     DELAYED = "DELAYED"
+    # Fim de dia: dados do último pregão fechado.
+    EOD = "EOD"
     CACHE = "CACHE"
     # Só para testes: os validadores recusam por padrão.
     TEST = "TEST"
@@ -67,6 +69,8 @@ class MarketSnapshot(StrictModel):
     volume: Count | None = None
     vwap: Positive | None = None
     regime: MarketRegime | None = None
+    name: str | None = None
+    change_percent: float | None = None
     provenance: Provenance
 
 
@@ -83,12 +87,21 @@ class OptionQuote(StrictModel):
     ask: NonNegative | None = None
     open_interest: Count | None = None
     volume: Count | None = None
+    close: NonNegative | None = None
+    last_trade_date: date | None = None
+    iv: NonNegative | None = None
+    delta: float | None = None
     provenance: Provenance
 
 
 class OptionChain(StrictModel):
     underlying: MarketSnapshot
     quotes: list[OptionQuote]
+    # Pregão a que a grade se refere. None em fontes sem data de pregão.
+    market_date: date | None = None
+    risk_free_rate: float | None = None
+    # Anos até o vencimento, na convenção da fonte.
+    time_to_expiry_years: Positive | None = None
 
 
 class PriceBar(StrictModel):

@@ -6,7 +6,7 @@ utilizáveis; problemas que comprometem a análise inteira tornam o relatório i
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 from core.config import DataQualityLimits
@@ -60,7 +60,8 @@ def _check_provenance(
     if provenance.kind is SourceKind.TEST and not allow_test:
         issues.append(_error("TEST_DATA", f"{label}: dado de teste recusado"))
     age = (now - provenance.market_time).total_seconds()
-    if age > limits.max_age_seconds:
+    max_age = limits.max_eod_age_seconds if provenance.kind is SourceKind.EOD else limits.max_age_seconds
+    if age > max_age:
         issues.append(_error("DATA_STALE", f"{label}: dado com {age:.0f}s de idade"))
     if age < -limits.max_future_seconds:
         issues.append(_error("FUTURE_TIMESTAMP", f"{label}: horário {-age:.0f}s no futuro"))
@@ -76,8 +77,10 @@ def validate_snapshot(
     return ValidationReport(tuple(_check_provenance(snapshot.symbol, snapshot.provenance, now, limits, allow_test)))
 
 
-def _quote_problem(quote: OptionQuote, spot: float, now: datetime) -> Issue | None:
+def _quote_problem(quote: OptionQuote, spot: float, now: datetime, market_date: date | None) -> Issue | None:
     label = quote.symbol
+    if market_date is not None and quote.last_trade_date != market_date:
+        return _warning("NOT_TRADED", f"{label}: sem negócio no pregão de {market_date}")
     if quote.bid is None or quote.ask is None or quote.bid == 0 or quote.ask == 0:
         return _warning("MISSING_QUOTE", f"{label}: sem bid e ask")
     if quote.bid > quote.ask:
@@ -114,7 +117,7 @@ def validate_chain(
         if skew > limits.max_time_skew_seconds:
             quote_issues.append(_error("TIME_SKEW", f"{quote.symbol}: {skew:.0f}s de diferença para o ativo"))
         issues.extend(quote_issues)
-        problem = _quote_problem(quote, spot.price, now)
+        problem = _quote_problem(quote, spot.price, now, chain.market_date)
         if problem is not None:
             issues.append(problem)
         elif not quote_issues:
