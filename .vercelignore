@@ -9,3 +9,4 @@ pyproject.toml
 firebase-blueprint.json
 .env*
 !.env.example
+agents
