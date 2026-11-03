@@ -69,6 +69,47 @@ def settlement_pnl(legs: Sequence[OptionLeg], spot: float) -> float:
     return float(position_pnl(legs, spot))
 
 
+def book_entry(legs: Sequence[OptionLeg], quotes: Mapping[str, OptionQuote]) -> dict[str, float] | None:
+    """Preço de entrada no lado desfavorável: compra no ask, venda no bid. None sem os dois lados."""
+    prices = {}
+    for leg in legs:
+        quote = quotes.get(leg.symbol)
+        if quote is None or not quote.bid or not quote.ask or quote.bid > quote.ask:
+            return None
+        prices[leg.symbol] = quote.ask if leg.action is LegAction.BUY else quote.bid
+    return prices
+
+
+def book_pnl(
+    legs: Sequence[OptionLeg], entry: Mapping[str, float] | None, quotes: Mapping[str, OptionQuote], settlement_spot: float | None = None
+) -> float | None:
+    """Resultado saindo no lado desfavorável. No vencimento, a saída é o valor intrínseco, sem spread."""
+    if not entry:
+        return None
+    total = 0.0
+    for leg in legs:
+        sign = 1 if leg.action is LegAction.BUY else -1
+        if settlement_spot is not None:
+            intrinsic = settlement_spot - leg.strike if leg.kind is OptionKind.CALL else leg.strike - settlement_spot
+            leave = max(intrinsic, 0.0)
+        else:
+            quote = quotes.get(leg.symbol)
+            if quote is None or not quote.bid or not quote.ask or quote.bid > quote.ask:
+                return None
+            leave = quote.bid if leg.action is LegAction.BUY else quote.ask
+        total += sign * (leave - entry[leg.symbol]) * leg.quantity
+    return total
+
+
+def book_max_loss(legs: Sequence[OptionLeg], entry: Mapping[str, float] | None) -> float | None:
+    """Perda máxima com os preços de entrada do livro. None se não houver risco definido."""
+    if not entry:
+        return None
+    repriced = [leg.model_copy(update={"premium": entry[leg.symbol]}) for leg in legs]
+    loss = analyze_payoff(repriced).max_loss
+    return loss if loss and loss > 0 else None
+
+
 def expected_pnl(legs: Sequence[OptionLeg], spot: float, sigma: float, t: float, r: float) -> float:
     """Valor esperado no vencimento, sob distribuição lognormal neutra ao risco, sem descontar."""
     if spot <= 0 or sigma <= 0 or t <= 0:
@@ -220,11 +261,22 @@ def _stats(values: list[float]) -> dict:
     }
 
 
+def _reading(close_median: float, book_median: float | None) -> str:
+    if book_median is None:
+        return "EXECUCAO_NAO_MEDIDA"
+    if book_median > 0:
+        return "LUCRO_NOS_DOIS_LIMITES"
+    if close_median > 0:
+        return "LUCRO_SO_NO_FECHAMENTO"
+    return "SEM_LUCRO"
+
+
 def rank_groups(rows: Sequence[Mapping], key: str) -> list[dict]:
     """Ordena pela mediana do retorno sobre o risco, não pela média: uma operação excepcional
     não sobe o grupo. Grupo com poucas datas de entrada fica sem posição."""
     groups: dict[str, _Group] = {}
     entries: dict[str, set[str]] = {}
+    book: dict[str, list[float]] = {}
     breakdowns: dict[str, dict[str, dict[str, list[float]]]] = {}
     for row in rows:
         value = row["return_on_risk"]
@@ -233,6 +285,8 @@ def rank_groups(rows: Sequence[Mapping], key: str) -> list[dict]:
         name = row[key]
         groups.setdefault(name, _Group()).returns.append(value)
         groups[name].risks.append(row["max_risk_brl"])
+        if row.get("return_on_risk_book") is not None:
+            book.setdefault(name, []).append(row["return_on_risk_book"])
         entries.setdefault(name, set()).add(row["entry_day"])
         slot = breakdowns.setdefault(name, {"symbol": {}, "horizon": {}, "regime": {}})
         slot["symbol"].setdefault(row["symbol"], []).append(value)
@@ -242,10 +296,16 @@ def rank_groups(rows: Sequence[Mapping], key: str) -> list[dict]:
     ranked = []
     for name, group in groups.items():
         stats = _stats(group.returns)
+        book_values = book.get(name, [])
+        book_median = median(book_values) if book_values else None
         ranked.append(
             {
                 key: name,
                 **stats,
+                "book_count": len(book_values),
+                "book_hit_rate": sum(value > 0 for value in book_values) / len(book_values) if book_values else None,
+                "book_median_return": book_median,
+                "reading": _reading(stats["median_return"], book_median),
                 "mean_risk_brl": mean(group.risks),
                 "entry_dates": len(entries[name]),
                 "sufficient_sample": len(entries[name]) >= MIN_RANKED_ENTRIES,
@@ -254,7 +314,16 @@ def rank_groups(rows: Sequence[Mapping], key: str) -> list[dict]:
                 "by_regime": {k: _stats(v) for k, v in breakdowns[name]["regime"].items()},
             }
         )
-    ranked.sort(key=lambda item: (not item["sufficient_sample"], -item["median_return"], -item["hit_rate"]))
+    # Ordena pelo limite conservador: lucrar só no fechamento não prova que a operação era possível.
+    ranked.sort(
+        key=lambda item: (
+            not item["sufficient_sample"],
+            item["book_median_return"] is None,
+            -(item["book_median_return"] or 0.0),
+            -item["median_return"],
+            -item["hit_rate"],
+        )
+    )
     position = 0
     for item in ranked:
         if item["sufficient_sample"]:

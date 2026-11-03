@@ -18,11 +18,11 @@ const strategy = (extra = {}) => ({
   theoretical_pnl: -2, regime: 'BULL', target_pct: null, stop_pct: null, cost_brl: 0, cost_informed: 0, status: 'ENCERRADA', close_reason: 'FIM_DO_PERIODO', closed_day: '2026-10-14',
   source: 'brapi', created_at: '', legs: opportunity.legs, breakevens: [51], employed_brl: 1000, max_risk_brl: 1000, horizon_days: 7,
   returns: { potential: 1.5, theoretical: -0.02, measured_label: 'SIMULADO', measured: 0.35 },
-  pnl_brl: 350, return_on_capital: 0.35, return_on_employed: 0.35, return_on_risk: 0.35, best_brl: 400, worst_brl: -100, max_drawdown_brl: 500, exit_reason: 'FIM_DO_PERIODO', marks_used: 2, days_to_target: null,
+  pnl_brl: 350, return_on_capital: 0.35, return_on_employed: 0.35, return_on_risk: 0.35, pnl_book_brl: -200, return_on_risk_book: -0.2, best_brl: 400, worst_brl: -100, max_drawdown_brl: 500, exit_reason: 'FIM_DO_PERIODO', marks_used: 2, days_to_target: null,
   ...extra,
 });
 const rankRow = (name: string, position: number | null) => ({
-  agent: name, agent_name: name, count: position ? 25 : 3, hit_rate: 0.6, mean_return: 0.2, median_return: 0.1, std_return: 0.3, best_return: 2, worst_return: -1, mean_risk_brl: 100, sufficient_sample: Boolean(position), position, by_symbol: {}, by_horizon: {}, by_regime: {},
+  agent: name, agent_name: name, count: position ? 25 : 3, hit_rate: 0.6, mean_return: 0.2, median_return: 0.1, std_return: 0.3, best_return: 2, worst_return: -1, mean_risk_brl: 100, book_count: 5, book_hit_rate: 0.1, book_median_return: -0.3, reading: 'LUCRO_SO_NO_FECHAMENTO', entry_dates: 25, sufficient_sample: Boolean(position), position, by_symbol: {}, by_horizon: {}, by_regime: {},
 });
 
 let routes: Record<string, { status?: number; body: unknown }>;
@@ -125,6 +125,7 @@ describe('resultados', () => {
     expect(await screen.findByText('Retorno potencial')).toBeTruthy();
     expect(screen.getByText('Retorno teórico')).toBeTruthy();
     expect(screen.getByText('Retorno simulado')).toBeTruthy();
+    expect(screen.getByText('Limite conservador, sobre o risco')).toBeTruthy();
     expect(screen.queryByText('Retorno observado')).toBeNull();
     expect(screen.getByText(/nenhuma operação foi executada/)).toBeTruthy();
     expect(screen.getByText('Não informados: resultado sem custos')).toBeTruthy();
@@ -167,7 +168,8 @@ describe('rankings', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Rankings' }));
     const table = (await screen.findByText('Delta moderado')).closest('table')!;
     expect(within(table).getByText('Amostra pequena')).toBeTruthy();
-    expect(screen.getByText(/usa a mediana, não a média/)).toBeTruthy();
+    expect(screen.getByText(/usa a mediana no livro, não a média/)).toBeTruthy();
+    expect(within(table).getAllByText('Lucro só no fechamento').length).toBeGreaterThan(0);
   });
 
   it('troca entre simulado e observado sem misturar', async () => {

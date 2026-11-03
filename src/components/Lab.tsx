@@ -17,6 +17,12 @@ const STATUS_ASSET: Record<string, string> = {
   DADOS_INSUFICIENTES: 'Dados insuficientes',
   NAO_ANALISADO: 'Não analisado',
 };
+const READING: Record<LabRankingRow['reading'], string> = {
+  LUCRO_NOS_DOIS_LIMITES: 'Lucro nos dois limites',
+  LUCRO_SO_NO_FECHAMENTO: 'Lucro só no fechamento',
+  SEM_LUCRO: 'Sem lucro',
+  EXECUCAO_NAO_MEDIDA: 'Execução não medida',
+};
 const REASON: Record<string, string> = {
   ALVO: 'Alvo atingido',
   STOP: 'Stop atingido',
@@ -438,14 +444,18 @@ function RankingTable({ title, rows, name }: { title: string; rows: LabRankingRo
       {rows.length === 0 ? (
         <p>Nenhum resultado encerrado ainda.</p>
       ) : (
-        <table className="np-table min-w-[760px]">
+        <table className="np-table min-w-[1100px]">
           <thead>
             <tr>
               <th scope="col" className="text-left">Posição</th>
               <th scope="col" className="text-left">Nome</th>
+              <th scope="col" className="text-left">Leitura</th>
               <th scope="col" className="text-right">Estratégias</th>
-              <th scope="col" className="text-right">Acerto</th>
-              <th scope="col" className="text-right">Mediana</th>
+              <th scope="col" className="text-right">Datas</th>
+              <th scope="col" className="text-right">Mediana no livro</th>
+              <th scope="col" className="text-right">Acerto no livro</th>
+              <th scope="col" className="text-right">Mediana no fechamento</th>
+              <th scope="col" className="text-right">Acerto no fechamento</th>
               <th scope="col" className="text-right">Média</th>
               <th scope="col" className="text-right">Desvio</th>
               <th scope="col" className="text-right">Melhor</th>
@@ -457,9 +467,13 @@ function RankingTable({ title, rows, name }: { title: string; rows: LabRankingRo
               <tr key={name(row)}>
                 <td>{row.position ?? <span className="text-xs text-ink-2">Amostra pequena</span>}</td>
                 <td className="font-semibold">{name(row)}</td>
+                <td>{READING[row.reading]}</td>
                 <td className="text-right">{row.count}</td>
-                <td className="text-right">{formatRatio(row.hit_rate, 0)}</td>
+                <td className="text-right">{row.entry_dates}</td>
+                <td className="text-right font-semibold"><Signed value={row.book_median_return}>{formatRatio(row.book_median_return)}</Signed></td>
+                <td className="text-right">{formatRatio(row.book_hit_rate, 0)}</td>
                 <td className="text-right"><Signed value={row.median_return}>{formatRatio(row.median_return)}</Signed></td>
+                <td className="text-right">{formatRatio(row.hit_rate, 0)}</td>
                 <td className="text-right"><Signed value={row.mean_return}>{formatRatio(row.mean_return)}</Signed></td>
                 <td className="text-right">{formatRatio(row.std_return)}</td>
                 <td className="text-right">{formatRatio(row.best_return)}</td>
@@ -483,7 +497,7 @@ function Rankings() {
         <button aria-current={mode === 'FORWARD'} onClick={() => setMode('FORWARD')} className="np-btn">Observado (acompanhamento)</button>
       </div>
       <p className="font-display text-xs text-ink-2">
-        Retorno sobre o risco máximo. A ordem usa a mediana, não a média, para uma operação excepcional não decidir. Com menos de 20 datas de entrada, não há posição, porque estratégias da mesma data se movem juntas. Simulado e observado nunca se misturam.
+        Retorno sobre o risco máximo, em dois limites: fechamento, que tende a ser otimista, e livro final, comprando no ask e vendendo no bid, que tende a ser pessimista porque é sobra de ofertas. A ordem usa a mediana no livro, não a média, para uma operação excepcional não decidir. Com menos de 20 datas de entrada, não há posição, porque estratégias da mesma data se movem juntas. Simulado e observado nunca se misturam.
       </p>
       {data.loading && !data.data && <Loading label="Calculando..." />}
       {data.error && <ErrorNotice error={data.error} onRetry={data.reload} />}
@@ -522,6 +536,11 @@ function StrategyDetail({ id, onBack }: { id: string; onBack: () => void }) {
             <ReturnRow name="Retorno potencial" hint="Máximo que a estrutura permite no vencimento" value={item.returns.potential} />
             <ReturnRow name="Retorno teórico" hint="Valor esperado pelo modelo, com a vol da entrada" value={item.returns.theoretical} />
             <ReturnRow name={measuredName} hint={item.returns.measured_label === 'SIMULADO' ? 'Preços históricos reais, com execução presumida no fechamento' : 'Preços reais posteriores à entrada, sem execução'} value={item.returns.measured} strong />
+            <ReturnRow
+              name="Limite conservador, sobre o risco"
+              hint="Compra no ask e venda no bid das ofertas finais. Sem oferta dos dois lados, não há valor"
+              value={item.return_on_risk_book}
+            />
           </tbody>
         </table>
       </div>

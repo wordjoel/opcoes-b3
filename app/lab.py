@@ -19,6 +19,9 @@ from data.providers.brapi import candidate_expiries
 from data.validators import ValidationReport, validate_chain
 from db.client import Database
 from quant.lab import (
+    book_entry,
+    book_max_loss,
+    book_pnl,
     MIN_LIQUID_SERIES,
     MIN_SCAN_OPEN_INTEREST,
     MIN_SCAN_VOLUME,
@@ -236,20 +239,22 @@ def _insert_strategy(
     size = size_position(proposal.max_loss, net_premium(proposal.legs), plan.capital_brl)
     if size is None:
         raise DataInsufficientError("o capital hipotético não comporta nem um lote desta estrutura")
+    entry_book = book_entry(proposal.legs, {quote.symbol: quote for quote in candidate.quotes})
     identity = _strategy_id(mode, agent, candidate.key, symbol, expiry, entry, proposal.legs, plan.capital_brl, end_day)
     if db.fetch("SELECT 1 FROM lab_strategies WHERE id = ?", (identity,)):
         return identity, False
     db.run(
         "INSERT INTO lab_strategies (id, mode, agent, symbol, structure_key, structure_name, expiry, entry_day, end_day, legs_json,"
         " capital_brl, lots, unit_debit, max_profit, max_loss, breakevens_json, probability, theoretical_pnl, regime, target_pct,"
-        " stop_pct, cost_brl, cost_informed, status, source, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
+        " stop_pct, cost_brl, cost_informed, status, source, created_at, entry_book_json)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING",
         (
             identity, mode, agent, symbol, candidate.key, proposal.name, expiry.isoformat(), entry.isoformat(), end_day.isoformat(),
             json.dumps([leg.model_dump(mode="json") for leg in proposal.legs]), plan.capital_brl, size.lots,
             net_premium(proposal.legs), proposal.max_profit, proposal.max_loss, json.dumps(proposal.breakeven_points), probability,
             theoretical, regime, plan.target_pct, plan.stop_pct, plan.cost_brl or 0.0, 0 if plan.cost_brl is None else 1, "ATIVA", source,
             now.isoformat(),
+            json.dumps(entry_book) if entry_book else None,
         ),
     )
     return identity, True
@@ -305,11 +310,14 @@ def _write_mark(db: Database, identity: str, day: date, legs: list[OptionLeg], e
     settlement = day >= expiry
     prices = _prices_on(chain, day, legs)
     pnl = settlement_pnl(legs, spot) if settlement else mark_pnl(legs, prices)
+    rows = db.fetch("SELECT entry_book_json FROM lab_strategies WHERE id = ?", (identity,))
+    entry_book = json.loads(rows[0][0]) if rows and rows[0][0] else None
+    book = book_pnl(legs, entry_book, {quote.symbol: quote for quote in chain.quotes}, spot if settlement else None)
     db.run(
-        "INSERT INTO lab_marks (strategy_id, day, pnl_unit, spot, prices_json, complete, settlement, source, fetched_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT (strategy_id, day) DO NOTHING",
+        "INSERT INTO lab_marks (strategy_id, day, pnl_unit, spot, prices_json, complete, settlement, source, fetched_at, pnl_book_unit)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT (strategy_id, day) DO NOTHING",
         (identity, day.isoformat(), pnl, spot, json.dumps(prices), 0 if pnl is None else 1, 1 if settlement else 0,
-         chain.underlying.provenance.source, now.isoformat()),
+         chain.underlying.provenance.source, now.isoformat(), book),
     )
     return pnl
 
@@ -474,14 +482,41 @@ def run_backtest(
     return summary
 
 
+def backfill_book(provider: DataProvider, db: Database) -> dict:
+    """Calcula o limite conservador de estratégias já gravadas, usando a grade guardada dos pregões."""
+    summary = {"strategies": 0, "marks": 0, "without_book": 0}
+    rows = db.fetch("SELECT id, symbol, expiry, entry_day, legs_json FROM lab_strategies WHERE mode = 'BACKTEST' AND entry_book_json IS NULL")
+    for identity, symbol, expiry_text, entry_text, legs_text in rows:
+        legs, expiry = _legs_of(legs_text), date.fromisoformat(expiry_text)
+        chain = provider.get_option_chain_on(symbol, expiry, date.fromisoformat(entry_text))
+        entry_book = book_entry(legs, {quote.symbol: quote for quote in chain.quotes}) if chain else None
+        if not entry_book:
+            summary["without_book"] += 1
+            continue
+        db.run("UPDATE lab_strategies SET entry_book_json = ? WHERE id = ?", (json.dumps(entry_book), identity))
+        summary["strategies"] += 1
+        for (day_text,) in db.fetch("SELECT day FROM lab_marks WHERE strategy_id = ? AND pnl_book_unit IS NULL", (identity,)):
+            later = provider.get_option_chain_on(symbol, expiry, date.fromisoformat(day_text))
+            if later is None:
+                continue
+            settlement = date.fromisoformat(day_text) >= expiry
+            value = book_pnl(legs, entry_book, {quote.symbol: quote for quote in later.quotes}, later.underlying.price if settlement else None)
+            if value is not None:
+                db.run("UPDATE lab_marks SET pnl_book_unit = ? WHERE strategy_id = ? AND day = ?", (value, identity, day_text))
+                summary["marks"] += 1
+    return summary
+
+
 _LIST_COLUMNS = (
     "id, mode, agent, symbol, structure_key, structure_name, expiry, entry_day, end_day, legs_json, capital_brl, lots, unit_debit,"
     " max_profit, max_loss, breakevens_json, probability, theoretical_pnl, regime, target_pct, stop_pct, cost_brl, cost_informed,"
-    " status, close_reason, closed_day, source, created_at"
+    " status, close_reason, closed_day, source, created_at, entry_book_json"
 )
 
 
-def _strategy_view(columns: tuple, marks: list[tuple[str, float]], with_marks: list | None = None) -> dict:
+def _strategy_view(
+    columns: tuple, marks: list[tuple[str, float]], with_marks: list | None = None, book_by_day: dict[str, float] | None = None
+) -> dict:
     keys = [name.strip() for name in _LIST_COLUMNS.split(",")]
     row = dict(zip(keys, columns))
     lots, capital, max_loss = row["lots"], row["capital_brl"], row["max_loss"]
@@ -490,10 +525,14 @@ def _strategy_view(columns: tuple, marks: list[tuple[str, float]], with_marks: l
     path = evaluate_path(marks, max_loss, row["target_pct"], row["stop_pct"])
     result = returns_summary(path.final_pnl_unit, lots, capital, employed, max_risk, row["cost_brl"])
     target_day = path.exit_day if path.exit_reason == "ALVO" else None
+    entry_book = json.loads(row["entry_book_json"]) if row["entry_book_json"] else None
+    book_unit = (book_by_day or {}).get(path.exit_day) if path.exit_day else None
+    book_risk = book_max_loss(_legs_of(row["legs_json"]), entry_book)
+    book_result = book_unit * lots - row["cost_brl"] if book_unit is not None else None
     entry = date.fromisoformat(row["entry_day"])
     measured_label = "SIMULADO" if row["mode"] == "BACKTEST" else "OBSERVADO"
     view = {
-        **{key: row[key] for key in row if key not in ("legs_json", "breakevens_json")},
+        **{key: row[key] for key in row if key not in ("legs_json", "breakevens_json", "entry_book_json")},
         "agent_name": AGENTS.get(row["agent"], (row["agent"],))[0],
         "legs": json.loads(row["legs_json"]),
         "breakevens": json.loads(row["breakevens_json"]),
@@ -507,6 +546,8 @@ def _strategy_view(columns: tuple, marks: list[tuple[str, float]], with_marks: l
             "measured": result["return_on_capital"],
         },
         **result,
+        "pnl_book_brl": book_result,
+        "return_on_risk_book": book_result / (book_risk * lots) if book_result is not None and book_risk else None,
         "best_brl": path.best_unit * lots if path.best_unit is not None else None,
         "worst_brl": path.worst_unit * lots if path.worst_unit is not None else None,
         "max_drawdown_brl": path.max_drawdown_unit * lots,
@@ -523,13 +564,16 @@ def list_strategies(db: Database, mode: str | None = None, limit: int = 300) -> 
     where, params = ("WHERE mode = ?", (mode,)) if mode else ("", ())
     rows = db.fetch(f"SELECT {_LIST_COLUMNS} FROM lab_strategies {where} ORDER BY entry_day DESC, id LIMIT ?", (*params, limit))
     marks: dict[str, list[tuple[str, float]]] = {}
-    for strategy, day, pnl in db.fetch(
-        f"SELECT m.strategy_id, m.day, m.pnl_unit FROM lab_marks m JOIN lab_strategies s ON s.id = m.strategy_id"
+    books: dict[str, dict[str, float]] = {}
+    for strategy, day, pnl, book in db.fetch(
+        f"SELECT m.strategy_id, m.day, m.pnl_unit, m.pnl_book_unit FROM lab_marks m JOIN lab_strategies s ON s.id = m.strategy_id"
         f" {'WHERE s.mode = ? AND' if mode else 'WHERE'} m.complete = 1 ORDER BY m.day",
         params,
     ):
         marks.setdefault(strategy, []).append((day, pnl))
-    return [_strategy_view(row, marks.get(row[0], [])) for row in rows]
+        if book is not None:
+            books.setdefault(strategy, {})[day] = book
+    return [_strategy_view(row, marks.get(row[0], []), None, books.get(row[0])) for row in rows]
 
 
 def strategy_detail(db: Database, identity: str) -> dict | None:
@@ -537,7 +581,7 @@ def strategy_detail(db: Database, identity: str) -> dict | None:
     if not rows:
         return None
     all_marks = db.fetch(
-        "SELECT day, pnl_unit, spot, prices_json, complete, settlement, source, fetched_at FROM lab_marks WHERE strategy_id = ? ORDER BY day",
+        "SELECT day, pnl_unit, spot, prices_json, complete, settlement, source, fetched_at, pnl_book_unit FROM lab_marks WHERE strategy_id = ? ORDER BY day",
         (identity,),
     )
     lots = rows[0][11]
@@ -552,10 +596,11 @@ def strategy_detail(db: Database, identity: str) -> dict | None:
             "source": source,
             "fetched_at": fetched,
         }
-        for day, pnl, spot, prices, complete, settlement, source, fetched in all_marks
+        for day, pnl, spot, prices, complete, settlement, source, fetched, _ in all_marks
     ]
+    books = {mark[0]: mark[8] for mark in all_marks if mark[8] is not None}
     complete = [(item["day"], all_marks[index][1]) for index, item in enumerate(details) if item["complete"]]
-    return _strategy_view(rows[0], complete, details)
+    return _strategy_view(rows[0], complete, details, books)
 
 
 def ranking(db: Database, mode: str) -> dict:

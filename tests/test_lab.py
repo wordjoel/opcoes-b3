@@ -14,7 +14,7 @@ from core.exceptions import DataInsufficientError
 from core.types import LegAction, MarketSnapshot, OptionChain, OptionKind, OptionQuote, Provenance, SourceKind
 from data.providers.brapi import BrapiProvider
 from db.client import Database, migrate
-from quant.lab import evaluate_path, expected_pnl, mark_pnl, rank_groups, returns_summary, settlement_pnl, size_position, vertical_scan
+from quant.lab import book_entry, book_max_loss, book_pnl, evaluate_path, expected_pnl, mark_pnl, rank_groups, returns_summary, settlement_pnl, size_position, vertical_scan
 from quant.pricing.black_scholes import option_price
 from tests.helpers import leg
 from tests.test_api import FakeProvider, PASSWORD, SECRET
@@ -159,6 +159,89 @@ class TestRanking:
 
     def test_unmeasured_results_are_ignored(self):
         assert rank_groups([self.row("a", None)], "agent") == []
+
+
+class TestBookLimit:
+    def quotes(self, **prices):
+        from tests.helpers import quote as make
+
+        return {name: make(symbol=name, bid=bid, ask=ask) for name, (bid, ask) in prices.items()}
+
+    def legs(self):
+        return [leg("BUY", "CALL", 40.0, 2.0).model_copy(update={"symbol": "A"}), leg("SELL", "CALL", 44.0, 1.0).model_copy(update={"symbol": "B"})]
+
+    def test_enters_on_the_unfavorable_side(self):
+        assert book_entry(self.legs(), self.quotes(A=(1.9, 2.1), B=(0.9, 1.1))) == {"A": 2.1, "B": 0.9}
+
+    @pytest.mark.parametrize("prices", [{"A": (None, 2.1), "B": (0.9, 1.1)}, {"A": (1.9, 0.0), "B": (0.9, 1.1)}, {"A": (3.0, 2.0), "B": (0.9, 1.1)}, {"A": (1.9, 2.1)}])
+    def test_incomplete_or_crossed_book_gives_nothing(self, prices):
+        assert book_entry(self.legs(), self.quotes(**prices)) is None
+
+    def test_spread_turns_flat_prices_into_a_loss(self):
+        entry = book_entry(self.legs(), self.quotes(A=(1.9, 2.1), B=(0.9, 1.1)))
+        assert book_pnl(self.legs(), entry, self.quotes(A=(1.9, 2.1), B=(0.9, 1.1))) == pytest.approx(-40.0)
+
+    def test_settlement_has_no_exit_spread(self):
+        entry = {"A": 2.1, "B": 0.9}
+        assert book_pnl(self.legs(), entry, {}, 46.0) == pytest.approx((6 - 2.1) * 100 - (2 - 0.9) * 100)
+
+    def test_missing_exit_book_gives_nothing(self):
+        assert book_pnl(self.legs(), {"A": 2.1, "B": 0.9}, self.quotes(A=(1.9, 2.1))) is None
+
+    def test_no_entry_gives_nothing(self):
+        assert book_pnl(self.legs(), None, {}) is None and book_max_loss(self.legs(), None) is None
+
+    def test_risk_uses_entry_prices(self):
+        assert book_max_loss(self.legs(), {"A": 2.1, "B": 0.9}) == pytest.approx(120.0)
+
+    def test_ranking_orders_by_conservative_limit_and_explains(self):
+        base = {"max_risk_brl": 100.0, "symbol": "X", "horizon_days": 5, "regime": "BULL"}
+        artifact = [{**base, "agent": "artefato", "return_on_risk": 1.0, "return_on_risk_book": -1.0, "entry_day": f"a{i}"} for i in range(25)]
+        modest = [{**base, "agent": "modesto", "return_on_risk": 0.05, "return_on_risk_book": 0.01, "entry_day": f"m{i}"} for i in range(25)]
+        unmeasured = [{**base, "agent": "sem_livro", "return_on_risk": 2.0, "return_on_risk_book": None, "entry_day": f"u{i}"} for i in range(25)]
+        ranked = rank_groups(artifact + modest + unmeasured, "agent")
+        assert [item["agent"] for item in ranked] == ["modesto", "artefato", "sem_livro"]
+        assert [item["reading"] for item in ranked] == ["LUCRO_NOS_DOIS_LIMITES", "LUCRO_SO_NO_FECHAMENTO", "EXECUCAO_NAO_MEDIDA"]
+
+    def test_reported_when_loss_in_both(self):
+        base = {"agent": "a", "max_risk_brl": 1.0, "symbol": "X", "horizon_days": 5, "regime": "BULL", "entry_day": "d"}
+        assert rank_groups([{**base, "return_on_risk": -0.1, "return_on_risk_book": -0.2}], "agent")[0]["reading"] == "SEM_LUCRO"
+
+
+class TestBookInBacktest:
+    def chain_book(self, chain):
+        return chain.model_copy(update={"quotes": [q.model_copy(update={"bid": q.close * 0.9, "ask": q.close * 1.1}) for q in chain.quotes]})
+
+    def provider(self):
+        outer = self
+
+        class Book(HistoryProvider):
+            def get_option_chain_on(self, underlying, expiry, day):
+                chain = super().get_option_chain_on(underlying, expiry, day)
+                return outer.chain_book(chain) if chain else None
+
+        return Book(after=40.0)
+
+    def test_every_result_shows_both_limits(self, db):
+        lab.run_backtest(self.provider(), db, "PETR4", BT_PLAN, 1, NOW)
+        rows = lab.list_strategies(db, "BACKTEST")
+        measured = [row for row in rows if row["return_on_risk_book"] is not None]
+        assert measured
+        for row in measured:
+            assert row["pnl_book_brl"] < row["pnl_brl"]
+
+    def test_without_book_there_is_no_conservative_result(self, db):
+        lab.run_backtest(HistoryProvider(after=40.0), db, "PETR4", BT_PLAN, 1, NOW)
+        assert all(row["return_on_risk_book"] is None for row in lab.list_strategies(db, "BACKTEST"))
+
+    def test_backfill_fills_old_rows_and_never_touches_close_results(self, db):
+        lab.run_backtest(HistoryProvider(after=40.0), db, "PETR4", BT_PLAN, 1, NOW)
+        before = db.fetch("SELECT strategy_id, day, pnl_unit FROM lab_marks ORDER BY 1, 2")
+        summary = lab.backfill_book(self.provider(), db)
+        assert summary["strategies"] > 0 and summary["marks"] > 0
+        assert db.fetch("SELECT strategy_id, day, pnl_unit FROM lab_marks ORDER BY 1, 2") == before
+        assert any(row["return_on_risk_book"] is not None for row in lab.list_strategies(db, "BACKTEST"))
+        assert lab.backfill_book(self.provider(), db)["strategies"] == 0
 
 
 class TestVerticalScan:

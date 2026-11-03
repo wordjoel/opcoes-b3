@@ -302,6 +302,8 @@ export interface LabStrategy {
   return_on_capital: number | null;
   return_on_employed: number | null;
   return_on_risk: number | null;
+  pnl_book_brl: number | null;
+  return_on_risk_book: number | null;
   best_brl: number | null;
   worst_brl: number | null;
   max_drawdown_brl: number;
@@ -320,5 +322,10 @@ export interface LabRankingRow {
   std_return: number;
   best_return: number;
   worst_return: number;
+  book_count: number;
+  book_hit_rate: number | null;
+  book_median_return: number | null;
+  reading: 'LUCRO_NOS_DOIS_LIMITES' | 'LUCRO_SO_NO_FECHAMENTO' | 'SEM_LUCRO' | 'EXECUCAO_NAO_MEDIDA';
+  entry_dates: number;
   position: number | null;
 }

@@ -28,6 +28,10 @@ Os "agentes" do ranking são as cinco regras que propõem estruturas de fato: `r
 
 Nenhum deles é lucro realizado. Simulado e observado nunca se misturam no ranking.
 
+## Dois limites de execução
+
+Cada resultado mostra o fechamento e o limite conservador, com compra no ask e venda no bid. O fechamento tende a ser otimista: as pernas negociaram em horários diferentes. O livro final tende a ser pessimista: é a sobra de ofertas depois do pregão. O preço real de execução não foi medido e não há como garantir que fique entre os dois. O ranking ordena pela mediana no livro.
+
 ## Regras contra resultados falsos
 
 - **Sem olhar o futuro:** a proposta usa só a grade do dia da entrada, e um teste troca os preços futuros para provar que as pernas não mudam.
@@ -35,11 +39,11 @@ Nenhum deles é lucro realizado. Simulado e observado nunca se misturam no ranki
 - **Vencimento:** a liquidação é pelo preço do ativo.
 - **Entrada à frente:** é recusada se o ativo já se moveu mais de 3% desde a grade.
 - **O cliente não informa preços:** a estrutura é refeita no servidor.
-- **Varredura:** recusa pares com vols distantes, poucos negócios ou risco ínfimo frente à largura. Sem isso, ela escolhia preços velhos e mostrava retornos impossíveis.
+- **Varredura:** recusa pares com vols distantes, poucos negócios ou risco ínfimo frente à largura. Sem isso, ela escolhia preços velhos e mostrava retornos impossíveis. Mesmo com os filtros, o ganho dela no fechamento some no livro: é artefato de preço, não vantagem comprovada.
 
 ## Limitações
 
-- **Execução:** só há fechamento. O bid e o ask históricos são sobras de ofertas, então não provam que a operação seria possível ao preço usado, e esse viés é otimista.
+- **Execução:** não há preço de execução real. Os dois limites delimitam a dúvida, mas não a resolvem.
 - **Fechamentos não simultâneos:** as pernas podem ter negociado em horários diferentes, inclusive nas estruturas selecionadas.
 - **Alvo e stop:** avaliados nas datas marcadas, não dentro do dia. O backtest marca só em 1, 3, 5, 10, 15 e 30 pregões, então o drawdown é aproximado.
 - **Custos:** só entram se informados.
