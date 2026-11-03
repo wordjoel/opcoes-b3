@@ -133,6 +133,8 @@
   }
 
   .np-table {
+  /* Prende os rótulos sr-only (absolutos) na tabela: sem isto escapam do contêiner que rola e alargam a página no celular. */
+  position: relative;
     width: 100%;
     border-collapse: collapse;
     font-family: var(--dp-typography-display);
