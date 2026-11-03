@@ -1,0 +1,11 @@
+# Só o frontend é publicado: o motor Python, os testes e a auditoria ficam fora.
+.venv
+core
+data
+quant
+tests
+docs
+pyproject.toml
+firebase-blueprint.json
+.env*
+!.env.example
