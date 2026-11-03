@@ -11,9 +11,9 @@ from math import log1p
 from statistics import mean
 
 from core.text import decimal_comma
-from core.types import CorporateEvent, LegAction, OptionLeg, OptionQuote, RiskAssessment, StrategyProposal
+from core.types import CorporateEvent, ExerciseStyle, LegAction, OptionLeg, OptionQuote, RiskAssessment, StrategyProposal
 from quant.payoff import net_premium, position_pnl, probability_of_profit
-from quant.pricing.black_scholes import option_price
+from quant.pricing.binomial import model_value
 
 _SPOT_SHOCKS = (-0.20, -0.10, -0.05, 0.05, 0.10, 0.20)
 _VOL_SHOCKS = (-0.10, 0.10)
@@ -44,6 +44,73 @@ class RiskLimits:
     min_days_with_earnings: int = 7
 
 
+@dataclass(frozen=True)
+class CapitalLimits:
+    """Definidos pelo proprietário: o sistema não presume capital nem limite."""
+
+    capital_brl: float
+    # Perda máxima por estrutura, em % do capital.
+    max_loss_pct: float
+
+    def __post_init__(self) -> None:
+        if self.capital_brl <= 0:
+            raise ValueError("Capital precisa ser positivo")
+        if not 0 < self.max_loss_pct <= 100:
+            raise ValueError("Limite de perda precisa estar entre 0 e 100%")
+
+
+def decide(
+    proposal: StrategyProposal, rules: RiskAssessment, capital: CapitalLimits | None, spot_drift: float | None
+) -> dict:
+    """APROVADA só com regras cumpridas, capital e limite informados, e todos os dados presentes.
+
+    Perna vendida exige margem, calculada pela B3 e pela corretora, que não temos: nesse caso o
+    capital necessário fica desconhecido e a estrutura nunca é aprovada. A perda máxima continua
+    informada, mas não substitui a margem.
+    """
+    legs = proposal.legs
+    has_sold_leg = any(leg.action is LegAction.SELL for leg in legs)
+    debit = sum(leg.premium * leg.quantity * (1 if leg.action is LegAction.BUY else -1) for leg in legs)
+    required = None if has_sold_leg else debit
+
+    reasons: list[str] = []
+    missing: list[str] = []
+    for reason in (rules.rejection_reason or "").split("; "):
+        if "não medida" in reason:
+            missing.append(reason)
+        elif reason:
+            reasons.append(reason)
+
+    if capital is None:
+        missing.append("capital e limite de perda não informados")
+    else:
+        limit = capital.capital_brl * capital.max_loss_pct / 100
+        if proposal.max_loss is not None and proposal.max_loss > limit:
+            reasons.append(decimal_comma(f"perda máxima de R$ {proposal.max_loss:.2f} acima do limite de R$ {limit:.2f}"))
+        if required is not None and required > capital.capital_brl:
+            reasons.append(decimal_comma(f"custo de R$ {required:.2f} acima do capital de R$ {capital.capital_brl:.2f}"))
+    if has_sold_leg:
+        missing.append("margem da corretora não disponível para perna vendida")
+    if spot_drift is None:
+        missing.append("não foi possível comparar o ativo com o pregão da grade")
+    if any("volatilidade implícita" in warning for warning in rules.warnings):
+        missing.append("falta volatilidade implícita em alguma perna")
+
+    status = "REPROVADA" if reasons else "INCOMPLETA" if missing else "APROVADA"
+    limit_brl = capital.capital_brl * capital.max_loss_pct / 100 if capital else None
+    max_risk_pct = proposal.max_loss / capital.capital_brl * 100 if capital and proposal.max_loss is not None else None
+    return {
+        "status": status,
+        "reasons": reasons,
+        "missing": missing,
+        "capital_required": required,
+        "max_risk": proposal.max_loss,
+        "max_risk_pct": max_risk_pct,
+        "limit_brl": limit_brl,
+        "risk_reward": proposal.risk_reward_ratio,
+    }
+
+
 def leg_liquidity(quote: OptionQuote, limits: RiskLimits = RiskLimits(), use_book: bool = True) -> float | None:
     """Nota de 0 a 1. None = não medida, o que é diferente de liquidez zero.
 
@@ -72,36 +139,48 @@ def position_pop(
 
 
 def stress_tests(
-    legs: Sequence[OptionLeg], ivs: Sequence[float | None], spot: float, t: float, r: float
+    legs: Sequence[OptionLeg],
+    ivs: Sequence[float | None],
+    spot: float,
+    t: float,
+    r: float,
+    styles: Sequence[ExerciseStyle | None] | None = None,
 ) -> dict[str, float]:
-    """P&L em R$: choques no ativo no vencimento e na vol hoje, ambos pelo modelo europeu."""
+    """P&L em R$: choques no ativo no vencimento e na vol hoje, pelo modelo do estilo de cada perna."""
+    styles = styles or [None] * len(legs)
     results = {
         f"Ativo {shock:+.0%} no vencimento": float(position_pnl(legs, spot * (1 + shock))) for shock in _SPOT_SHOCKS
     }
     if all(iv is not None and iv > 0 for iv in ivs):
         for shock in _VOL_SHOCKS:
             total = 0.0
-            for leg, iv in zip(legs, ivs):
+            for leg, iv, style in zip(legs, ivs, styles):
                 sigma = max(iv + shock, 0.01)
-                value = option_price(leg.kind, spot, leg.strike, t, r, sigma)
+                value = model_value(leg.kind, style, spot, leg.strike, t, r, sigma)
                 total += (1 if leg.action is LegAction.BUY else -1) * (value - leg.premium) * leg.quantity
             results[f"Vol {shock * 100:+.0f} pontos hoje"] = total
     return results
 
 
 def pnl_heatmap(
-    legs: Sequence[OptionLeg], ivs: Sequence[float | None], spot: float, t: float, r: float
+    legs: Sequence[OptionLeg],
+    ivs: Sequence[float | None],
+    spot: float,
+    t: float,
+    r: float,
+    styles: Sequence[ExerciseStyle | None] | None = None,
 ) -> dict | None:
     """Resultado hoje, em R$, para cada par de choque no ativo e na vol. None se faltar vol de alguma perna."""
     if any(iv is None or iv <= 0 for iv in ivs):
         return None
+    styles = styles or [None] * len(legs)
     pnl = []
     for vol_shock in _HEATMAP_VOL_SHOCKS:
         line = []
         for spot_shock in _HEATMAP_SPOT_SHOCKS:
             total = 0.0
-            for leg, iv in zip(legs, ivs):
-                value = option_price(leg.kind, spot * (1 + spot_shock), leg.strike, t, r, max(iv + vol_shock, 0.01))
+            for leg, iv, style in zip(legs, ivs, styles):
+                value = model_value(leg.kind, style, spot * (1 + spot_shock), leg.strike, t, r, max(iv + vol_shock, 0.01))
                 total += (1 if leg.action is LegAction.BUY else -1) * (value - leg.premium) * leg.quantity
             line.append(total)
         pnl.append(line)
@@ -158,6 +237,13 @@ def assess_risk(
         for leg, quote in zip(legs, quotes)
         if leg.action is LegAction.SELL and quote.style is not None and quote.style.value == "AMERICAN"
     ]
+    if any(quote.style is ExerciseStyle.AMERICAN for quote in quotes):
+        warnings.append(
+            "Há perna americana: heatmap e estresse usam árvore binomial, mas a vol implícita da fonte, "
+            "as gregas e a probabilidade vêm do modelo europeu."
+        )
+    if any(quote.style is None for quote in quotes):
+        warnings.append("A fonte não informou o estilo de alguma perna: avaliada pelo modelo europeu.")
     if american_short:
         warnings.append(f"Pernas vendidas americanas podem ser exercidas antes: {', '.join(american_short)}.")
     if any(leg.action is LegAction.SELL for leg in legs):
@@ -187,7 +273,7 @@ def assess_risk(
     return RiskAssessment(
         is_approved=approved,
         liquidity_score=liquidity,
-        stress_test_results=stress_tests(legs, ivs, spot, t, r),
+        stress_test_results=stress_tests(legs, ivs, spot, t, r, [quote.style for quote in quotes]),
         warnings=warnings,
         final_verdict="Passou nas regras de risco; não é recomendação." if approved else "Reprovada nas regras de risco.",
         rejection_reason=None if approved else "; ".join(rejections),

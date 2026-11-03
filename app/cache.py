@@ -42,6 +42,14 @@ class CachingProvider(DataProvider):
             return None
         return rows[0][0]
 
+    def _load(self, key: str, ttl: timedelta, parse):
+        """Entrada que o formato atual não entende vale como ausente: busca de novo, sem erro 500."""
+        try:
+            cached = self._read(key, ttl)
+            return parse(cached) if cached else None
+        except ValueError:
+            return None
+
     def _write(self, key: str, payload: str) -> None:
         self._database.run(
             "INSERT INTO provider_cache (key, payload, fetched_at) VALUES (?, ?, ?) "
@@ -51,36 +59,36 @@ class CachingProvider(DataProvider):
 
     def get_market_snapshot(self, symbol: str) -> MarketSnapshot:
         key = f"snapshot:{symbol}"
-        cached = self._read(key, _SNAPSHOT_TTL)
+        cached = self._load(key, _SNAPSHOT_TTL, MarketSnapshot.model_validate_json)
         if cached:
-            return MarketSnapshot.model_validate_json(cached)
+            return cached
         fresh = self._inner.get_market_snapshot(symbol)
         self._write(key, fresh.model_dump_json())
         return fresh
 
     def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
         key = f"chain:{underlying}:{expiry.isoformat()}"
-        cached = self._read(key, _CHAIN_TTL)
+        cached = self._load(key, _CHAIN_TTL, OptionChain.model_validate_json)
         if cached:
-            return OptionChain.model_validate_json(cached)
+            return cached
         fresh = self._inner.get_option_chain(underlying, expiry)
         self._write(key, fresh.model_dump_json())
         return fresh
 
     def get_expirations(self, underlying: str) -> list[date]:
         key = f"expirations:{underlying}"
-        cached = self._read(key, _EXPIRATIONS_TTL)
+        cached = self._load(key, _EXPIRATIONS_TTL, _DATES.validate_json)
         if cached:
-            return _DATES.validate_json(cached)
+            return cached
         fresh = self._inner.get_expirations(underlying)
         self._write(key, json.dumps([day.isoformat() for day in fresh]))
         return fresh
 
     def get_historical_prices(self, symbol: str, lookback: str = "1y") -> list[PriceBar]:
         key = f"history:{symbol}:{lookback}"
-        cached = self._read(key, _HISTORY_TTL)
+        cached = self._load(key, _HISTORY_TTL, _BARS.validate_json)
         if cached:
-            return _BARS.validate_json(cached)
+            return cached
         fresh = self._inner.get_historical_prices(symbol, lookback)
         self._write(key, _BARS.dump_json(fresh).decode())
         return fresh
@@ -108,9 +116,14 @@ class CachingProvider(DataProvider):
 
     def get_upcoming_events(self, symbol: str, today: date) -> list[CorporateEvent]:
         key = f"events:{symbol}:{today.isoformat()}"
-        cached = self._read(key, _HISTORY_TTL)
-        if cached:
-            return _EVENTS.validate_json(cached)
+        # Lista vazia também é resposta válida da fonte.
+        cached = self._load(key, _HISTORY_TTL, _EVENTS.validate_json)
+        if cached is not None:
+            return cached
         fresh = self._inner.get_upcoming_events(symbol, today)
         self._write(key, _EVENTS.dump_json(fresh).decode())
+        # A chave leva a data: sem isto, cada dia deixaria uma linha para sempre.
+        self._database.run(
+            "DELETE FROM provider_cache WHERE key LIKE ? AND key <> ?", (f"events:{symbol}:%", key)
+        )
         return fresh

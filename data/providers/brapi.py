@@ -11,8 +11,10 @@ Regras aprendidas com as respostas reais:
 """
 
 from calendar import FRIDAY, monthcalendar
+import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from statistics import median
 
 import httpx
@@ -48,6 +50,26 @@ _MIN_ATM_VALUES = 2
 _EVENTS_HORIZON_DAYS = 180
 
 
+# Depois de um 429, não insiste: cada nova chamada só gastaria a cota.
+_RATE_LIMIT_PAUSE_SECONDS = 60.0
+_TIMEOUT_SECONDS = 10.0
+
+
+def _guarded(method):
+    """Resposta fora do formato esperado vira falta de dado declarada, nunca um valor parcial."""
+
+    @wraps(method)
+    def wrapper(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except DataInsufficientError:
+            raise
+        except (KeyError, IndexError, TypeError, ValueError, AttributeError) as error:
+            raise DataInsufficientError(f"brapi com resposta inesperada ({type(error).__name__})") from None
+
+    return wrapper
+
+
 class _NotFound(DataInsufficientError):
     """A fonte respondeu 404: não há esse dado, o que é diferente de falta de acesso."""
 
@@ -74,11 +96,14 @@ class BrapiProvider(DataProvider):
         client: httpx.Client | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
-        self._client = client or httpx.Client(timeout=30)
+        self._client = client or httpx.Client(timeout=_TIMEOUT_SECONDS)
+        self._blocked_until = 0.0
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._now = now
 
     def _get(self, path: str, params: dict[str, str]) -> dict:
+        if time.monotonic() < self._blocked_until:
+            raise DataInsufficientError("limite de requisições da brapi atingido")
         response = None
         for attempt in range(2):
             try:
@@ -95,16 +120,21 @@ class BrapiProvider(DataProvider):
         if response.status_code == 403:
             raise DataInsufficientError("o plano da brapi não inclui este recurso")
         if response.status_code == 429:
+            self._blocked_until = time.monotonic() + _RATE_LIMIT_PAUSE_SECONDS
             raise DataInsufficientError("limite de requisições da brapi atingido")
         if response.status_code == 404:
             raise _NotFound(f"brapi não encontrou {params}")
         if response.status_code != 200:
             raise DataInsufficientError(f"brapi respondeu {response.status_code}")
-        return response.json()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("resposta sem objeto")
+        return payload
 
     def _provenance(self, kind: SourceKind, market_time: datetime) -> Provenance:
         return Provenance(source=SOURCE, kind=kind, collected_at=self._now(), market_time=market_time)
 
+    @_guarded
     def get_market_snapshot(self, symbol: str) -> MarketSnapshot:
         symbol = normalize_symbol(symbol)
         results = self._get("/stocks/quote", {"symbols": symbol}).get("results") or []
@@ -122,10 +152,12 @@ class BrapiProvider(DataProvider):
             ),
         )
 
+    @_guarded
     def get_expirations(self, underlying: str) -> list[date]:
         payload = self._get("/options/expirations", {"underlying": normalize_symbol(underlying)})
         return [date.fromisoformat(day) for day in payload.get("expirations", [])]
 
+    @_guarded
     def get_option_chain(self, underlying: str, expiry: date) -> OptionChain:
         symbol = normalize_symbol(underlying)
         params = {"underlying": symbol, "expirationDate": expiry.isoformat()}
@@ -180,6 +212,7 @@ class BrapiProvider(DataProvider):
             provenance=provenance,
         )
 
+    @_guarded
     def get_upcoming_events(self, symbol: str, today: date) -> list[CorporateEvent]:
         symbol = normalize_symbol(symbol)
         events: list[CorporateEvent] = []
@@ -217,6 +250,7 @@ class BrapiProvider(DataProvider):
                         events.append(CorporateEvent(kind=kind, day=day, label=item.get("label") or kind, confirmed=confirmed))
         return sorted(events, key=lambda event: event.day)
 
+    @_guarded
     def get_atm_iv_on(self, underlying: str, day: date) -> AtmIvSample | None:
         """Mediana das vols perto do ativo. Em datas passadas, lastTradeDate é o último negócio
         geral da série, não o daquele dia: por isso o filtro é pela confiança da própria fonte."""
@@ -243,6 +277,7 @@ class BrapiProvider(DataProvider):
             return AtmIvSample(day, median(values), expiry) if len(values) >= _MIN_ATM_VALUES else None
         return None
 
+    @_guarded
     def get_historical_prices(self, symbol: str, lookback: str = "1y") -> list[PriceBar]:
         symbol = normalize_symbol(symbol)
         params = {"symbols": symbol, "range": lookback, "interval": "1d"}

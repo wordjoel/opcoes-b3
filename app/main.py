@@ -1,10 +1,11 @@
 """API do B3 Opções Pro. Só leitura e análise: não existe rota de envio de ordens."""
 
 import hmac
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
@@ -13,12 +14,16 @@ from pydantic import BaseModel, Field
 
 from app import auth, service
 from app.cache import CachingProvider
+from core.clock import market_today
 from core.config import load_local_env
 from core.exceptions import DataInsufficientError
+from quant.risk import CapitalLimits
 from data.normalizer import is_stock_symbol, normalize_symbol
 from data.providers.base import DataProvider
 from data.providers.brapi import BrapiProvider
 from db.client import Database, DatabaseError
+
+logger = logging.getLogger("B3.API")
 
 
 @dataclass(frozen=True)
@@ -30,6 +35,8 @@ class Settings:
     insecure_cookie: bool = False
     # A Vercel o envia no header Authorization ao chamar o cron.
     cron_secret: str | None = None
+    # Atrás do proxy da Vercel, o IP real vem de um header que ela mesma define.
+    trust_proxy: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -39,6 +46,7 @@ class Settings:
             brapi_configured=bool(os.environ.get("BRAPI_API_KEY")),
             insecure_cookie=os.environ.get("B3_INSECURE_COOKIE") == "1",
             cron_secret=os.environ.get("CRON_SECRET"),
+            trust_proxy=bool(os.environ.get("VERCEL")),
         )
 
     @property
@@ -46,8 +54,16 @@ class Settings:
         return bool(self.password_hash and self.session_secret and len(self.session_secret) >= auth.MIN_SECRET_LENGTH)
 
 
+CACHE_RETENTION = timedelta(days=7)
+
+
 class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
+
+
+class RiskSettingsRequest(BaseModel):
+    capital_brl: float = Field(gt=0, le=1_000_000_000)
+    max_loss_pct: float = Field(gt=0, le=100)
 
 
 class WatchlistRequest(BaseModel):
@@ -88,6 +104,12 @@ def create_app(
     def _database_error(_: Request, error: DatabaseError) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(error)})
 
+    @app.exception_handler(Exception)
+    def _unexpected(_: Request, error: Exception) -> JSONResponse:
+        # O detalhe fica no log do servidor: nunca na resposta.
+        logger.error("Erro inesperado: %s", type(error).__name__, exc_info=error)
+        return JSONResponse(status_code=500, content={"detail": "Erro interno. Nenhum dado foi inventado."})
+
     @app.middleware("http")
     async def _no_store(request: Request, call_next):
         # Cotação em cache do navegador pareceria atual.
@@ -99,11 +121,23 @@ def create_app(
     def database() -> Database:
         return make_database()
 
-    def require_session(request: Request) -> None:
+    def session_ok(request: Request, db: Database) -> bool:
+        token = request.cookies.get(auth.COOKIE_NAME)
+        if not token or not auth.session_is_valid(token, config.session_secret, now()):
+            return False
+        return auth.session_is_valid(token, config.session_secret, now(), auth.revoked_before(db))
+
+    def require_session(request: Request, db: Database = Depends(database)) -> None:
         if not config.login_ready:
             raise HTTPException(503, "Login não configurado no servidor")
-        if not auth.session_is_valid(request.cookies.get(auth.COOKIE_NAME), config.session_secret, now()):
+        if not session_ok(request, db):
             raise HTTPException(401, "Sessão ausente ou vencida")
+
+    def login_origin(request: Request) -> str:
+        ip = request.client.host if request.client else "desconhecido"
+        if config.trust_proxy:
+            ip = request.headers.get("x-vercel-forwarded-for") or request.headers.get("x-real-ip") or ip
+        return auth.origin_key(ip.split(",")[0].strip(), config.session_secret)
 
     def provider(db: Database = Depends(database)) -> DataProvider:
         return make_provider(db)
@@ -112,24 +146,24 @@ def create_app(
         return [row[0] for row in db.fetch("SELECT symbol FROM watchlist ORDER BY added_at, symbol")]
 
     @router.get("/session")
-    def session(request: Request) -> dict:
+    def session(request: Request, db: Database = Depends(database)) -> dict:
         return {
-            "authenticated": config.login_ready
-            and auth.session_is_valid(request.cookies.get(auth.COOKIE_NAME), config.session_secret, now()),
+            "authenticated": config.login_ready and session_ok(request, db),
             "login_ready": config.login_ready,
         }
 
     @router.post("/login")
-    def login(body: LoginRequest, response: Response, db: Database = Depends(database)) -> dict:
+    def login(body: LoginRequest, request: Request, response: Response, db: Database = Depends(database)) -> dict:
         if not config.login_ready:
             raise HTTPException(503, "Login não configurado no servidor")
         moment = now()
-        if auth.too_many_failures(db, moment):
+        origin = login_origin(request)
+        if auth.too_many_failures(db, moment, origin):
             raise HTTPException(429, "Muitas tentativas. Aguarde 15 minutos.")
         if not auth.verify_password(body.password, config.password_hash):
-            auth.record_failure(db, moment)
+            auth.record_failure(db, moment, origin)
             raise HTTPException(401, "Senha incorreta")
-        auth.clear_failures(db)
+        auth.clear_failures(db, origin)
         response.set_cookie(
             auth.COOKIE_NAME,
             auth.create_session(config.session_secret, moment),
@@ -142,11 +176,40 @@ def create_app(
         return {"authenticated": True}
 
     @router.post("/logout")
-    def logout(response: Response) -> dict:
+    def logout(request: Request, response: Response, db: Database = Depends(database)) -> dict:
+        # Sem sessão válida, ninguém revoga as sessões do proprietário.
+        if config.login_ready and session_ok(request, db):
+            auth.revoke_sessions(db, now())
         response.delete_cookie(auth.COOKIE_NAME, path="/api")
         return {"authenticated": False}
 
     protected = [Depends(require_session)]
+
+    def read_capital(db: Database) -> tuple[CapitalLimits | None, str | None]:
+        rows = db.fetch("SELECT capital_brl, max_loss_pct, updated_at FROM risk_settings WHERE id = 1")
+        return (CapitalLimits(rows[0][0], rows[0][1]), rows[0][2]) if rows else (None, None)
+
+    def capital_view(db: Database) -> dict:
+        capital, updated_at = read_capital(db)
+        return {
+            "capital_brl": capital.capital_brl if capital else None,
+            "max_loss_pct": capital.max_loss_pct if capital else None,
+            "updated_at": updated_at,
+        }
+
+    @router.get("/settings/risk", dependencies=protected)
+    def get_risk_settings(db: Database = Depends(database)) -> dict:
+        return capital_view(db)
+
+    @router.put("/settings/risk", dependencies=protected)
+    def put_risk_settings(body: RiskSettingsRequest, db: Database = Depends(database)) -> dict:
+        db.run(
+            "INSERT INTO risk_settings (id, capital_brl, max_loss_pct, updated_at) VALUES (1, ?, ?, ?) "
+            "ON CONFLICT (id) DO UPDATE SET capital_brl = excluded.capital_brl, "
+            "max_loss_pct = excluded.max_loss_pct, updated_at = excluded.updated_at",
+            (body.capital_brl, body.max_loss_pct, now().isoformat()),
+        )
+        return capital_view(db)
 
     @router.get("/status", dependencies=protected)
     def status() -> dict:
@@ -186,11 +249,17 @@ def create_app(
         expected = f"Bearer {config.cron_secret}".encode()
         if not hmac.compare_digest(request.headers.get("authorization", "").encode(), expected):
             raise HTTPException(401, "Não autorizado")
-        rows = service.scanner(source, watchlist_symbols(db), now())["rows"]
+        moment = now()
+        result = service.scanner(source, watchlist_symbols(db), moment)
+        # Só a cópia temporária da fonte: o histórico de vol nunca é apagado.
+        limit = (moment - CACHE_RETENTION).isoformat()
+        db.run("DELETE FROM provider_cache WHERE fetched_at < ?", (limit,))
+        rows = result["rows"]
         return {
             "symbols": len(rows),
             "complete": sum(not row["missing"] for row in rows),
             "iv_samples": sum(row["iv_samples"] for row in rows),
+            "scan_complete": result["complete"],
         }
 
     @router.get("/assets/{symbol}", dependencies=protected)
@@ -199,7 +268,7 @@ def create_app(
 
     @router.get("/assets/{symbol}/expirations", dependencies=protected)
     def get_expirations(symbol: str, source: DataProvider = Depends(provider)) -> dict:
-        today = now().date()
+        today = market_today(now())
         days = [day for day in source.get_expirations(_valid_symbol(symbol)) if day >= today]
         return {"expirations": [day.isoformat() for day in days]}
 
@@ -213,8 +282,10 @@ def create_app(
         expiry: date,
         profile: Literal["CONSERVATIVE", "MODERATE", "AGGRESSIVE"] | None = None,
         source: DataProvider = Depends(provider),
+        db: Database = Depends(database),
     ) -> dict:
-        return service.strategies_view(source, _valid_symbol(symbol), expiry, now(), profile=profile)
+        capital, _ = read_capital(db)
+        return service.strategies_view(source, _valid_symbol(symbol), expiry, now(), profile=profile, capital=capital)
 
     app.include_router(router)
     return app

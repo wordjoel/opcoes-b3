@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
 
+from core.clock import market_today
 from core.config import DataQualityLimits
 from core.exceptions import DataInsufficientError
 from core.text import decimal_comma
@@ -94,7 +95,7 @@ def _quote_problem(quote: OptionQuote, spot: float, now: datetime, market_date: 
         if quote.bid > quote.ask:
             return _warning("CROSSED_QUOTE", f"{label}: bid {quote.bid} acima do ask {quote.ask}")
         price = quote.bid
-    if quote.expiry < now.date():
+    if quote.expiry < market_today(now):
         return _warning("EXPIRED_OPTION", f"{label}: venceu em {quote.expiry}")
     # O prêmio de uma call nunca excede o ativo, nem o de uma put europeia, o strike.
     if quote.kind is OptionKind.CALL and price > spot:

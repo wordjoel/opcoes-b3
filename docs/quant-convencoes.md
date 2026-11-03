@@ -17,7 +17,7 @@
 
 ## Limitações
 
-- **Estilo de exercício:** o modelo é europeu. Com dividendos ou puts muito dentro do dinheiro, o valor de uma opção americana pode ser maior. `OptionQuote.style` guarda o estilo, mas o preço ainda não o usa.
+- **Estilo de exercício:** heatmap e estresse usam árvore binomial nas pernas americanas e Black-Scholes nas europeias. A vol implícita vem da fonte, calculada por ela com Black-Scholes-Merton; gregas e probabilidades continuam europeias, e a análise avisa quando há perna americana. Sem dividendos, a call americana vale o mesmo que a europeia; a fonte informa dividendo 0, então dividendo discreto perto do vencimento não é modelado.
 - **Dividendos:** tratados como taxa contínua `q`. Dividendos discretos perto do vencimento não são modelados.
 - **Taxa de juros:** `r` é obrigatória e não tem valor padrão. Vem da brapi, com a mesma data da grade.
 - **Calendário:** `t` é responsabilidade de quem chama. Ainda não há calendário de feriados da B3.
@@ -31,11 +31,12 @@
 
 - **Preço em grade de fim de dia:** todas as pernas usam o fechamento, marcado como indicativo. Bid e ask dessa grade são sobras após o pregão (PETRL497 em 30/10: 607.600 opções negociadas e ofertas finais de 0,25 x 18,50), então não servem de preço nem de medida de liquidez. Os fechamentos das pernas não são simultâneos.
 - **Montagem:** as 11 estruturas de um único vencimento buscam o strike mais próximo de um alvo a cada 5% do ativo. Sem strike a até meia largura do alvo, a estrutura é listada como indisponível.
-- **Aprovação:** passar nas regras de `RiskLimits` não é recomendação. Os limites são escolhas iniciais do projeto, não padrões de mercado.
+- **Decisão:** `APROVADA` exige regras cumpridas, capital e limite definidos pelo proprietário, e todos os dados presentes. Sem algum deles, `INCOMPLETA`; regra violada, `REPROVADA`. Não é recomendação. Os limites de `RiskLimits` são escolhas iniciais do projeto, não padrões de mercado.
+- **Margem:** é calculada pela B3 e pela corretora, e não temos esse dado. Estrutura com perna vendida nunca é aprovada, mesmo com perda máxima definida; só compras a débito, cujo capital necessário é o próprio custo.
 - **Defasagem:** se o ativo tiver se movido mais de 3% desde o pregão da grade, todas as estruturas são reprovadas.
 - **Liquidez:** 40% contratos em aberto, 40% volume e 20% negócios, com referências de 1.000.000, 100.000 e 100 opções e negócios. O mínimo para aprovar é 0,50.
 - **Probabilidade:** usa a média das volatilidades implícitas das pernas.
-- **Ainda não calculados:** margem, tamanho de posição frente ao capital e limite de perda em R$.
+- **Ainda não calculados:** margem e tamanho de posição.
 - **Regime:** médias de 20 e 50 dias, com tendência a partir de 2% de diferença. Volatilidade implícita a 1,3x a histórica ou mais marca `HIGH_VOL`. Compatível com o regime não é recomendação.
 
 ## Delta, eventos, estrutura e contratos em aberto

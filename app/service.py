@@ -8,6 +8,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
+from core.clock import market_today
+from core.config import DataQualityLimits
 from core.exceptions import DataInsufficientError
 from core.text import decimal_comma
 from core.types import CorporateEvent, MarketRegime, MarketSnapshot, OptionChain, OptionKind, OptionQuote, PriceBar, Provenance
@@ -19,7 +21,7 @@ from quant.open_interest import summarize_open_interest
 from quant.payoff import net_premium, payoff_curve
 from quant.probability import probability_itm
 from quant.regime import classify_regime
-from quant.risk import RiskLimits, assess_risk, pnl_heatmap, position_pop
+from quant.risk import CapitalLimits, RiskLimits, assess_risk, decide, pnl_heatmap, position_pop
 from quant.structure import analyze_structure
 from quant.strategies import CHEAP_IV_RATIO, RICH_IV_RATIO, build_candidates, fits_regime
 from quant.volatility import bollinger_bands, ewma_volatility, historical_volatility, rolling_volatility
@@ -36,6 +38,19 @@ _IV_SECONDS_PER_SYMBOL = 6.0
 # Janelas de alerta: rompimento recente e evento próximo.
 _RECENT_STRUCTURE_BARS = 3
 _SOON_EVENT_DAYS = 7
+# Abaixo do limite de 60 s da função: cada chamada à fonte leva até 20 s (duas tentativas).
+_SCAN_BUDGET_SECONDS = 35.0
+_TIMED_OUT = "Varredura: tempo esgotado antes de analisar este ativo"
+
+
+def data_status(price: float | None, market_time: str | None, missing: list[str], now: datetime) -> str:
+    """REAL: cotação na janela de atraso e tudo completo. Nunca é inferido da falta de erro."""
+    if price is None or market_time is None:
+        return "INDISPONIVEL"
+    if missing:
+        return "INCOMPLETO"
+    age = (now - datetime.fromisoformat(market_time)).total_seconds()
+    return "ATRASADO" if age > DataQualityLimits().max_age_seconds else "REAL"
 
 
 def _provenance(provenance: Provenance) -> dict:
@@ -179,6 +194,7 @@ def asset_overview(provider: DataProvider, symbol: str, now: datetime) -> dict:
     return {
         "quote": _snapshot(snapshot),
         "quote_quality": _report(validate_snapshot(snapshot, now)),
+        "data_status": data_status(snapshot.price, snapshot.provenance.market_time.isoformat(), [], now),
         "history_quality": _report(bars_report),
         "historical_volatility": hv,
         "ewma_volatility": ewma,
@@ -235,6 +251,7 @@ def strategies_view(
     now: datetime,
     limits: RiskLimits = RiskLimits(),
     profile: str | None = None,
+    capital: CapitalLimits | None = None,
 ) -> dict:
     chain, report = _load_chain(provider, symbol, expiry, now)
     if chain.risk_free_rate is None or chain.time_to_expiry_years is None:
@@ -251,7 +268,7 @@ def strategies_view(
 
     use_book = chain.market_date is None
     candidates, unavailable = build_candidates(report.usable_quotes, spot, use_book=use_book, profile=profile)
-    events, events_error = _try_events(provider, symbol, now.date())
+    events, events_error = _try_events(provider, symbol, market_today(now))
     rank_row: dict = {"missing": [], "iv_rank": None, "iv_percentile": None, "iv_samples": 0}
     if chain.market_date:
         _fill_iv_rank(provider, symbol, chain.market_date, rank_row)
@@ -288,6 +305,7 @@ def strategies_view(
                         "price_basis": basis.value,
                         "iv": quote.iv,
                         "delta": quote.delta,
+                        "style": quote.style.value if quote.style else None,
                         "probability_itm": probability_itm(leg.kind, spot, leg.strike, t, r, quote.iv),
                     }
                     for leg, basis, quote in zip(proposal.legs, candidate.bases, candidate.quotes)
@@ -301,7 +319,8 @@ def strategies_view(
                     "rejection_reason": risk.rejection_reason,
                 },
                 "payoff": [{"price": price, "pnl": pnl} for price, pnl in payoff_curve(proposal.legs, spot)],
-                "heatmap": pnl_heatmap(proposal.legs, ivs, spot, t, r),
+                "heatmap": pnl_heatmap(proposal.legs, ivs, spot, t, r, [quote.style for quote in candidate.quotes]),
+                "decision": decide(proposal, risk, capital, drift),
             }
         )
     rows.sort(
@@ -325,6 +344,7 @@ def strategies_view(
         "iv_ratio": iv_ratio,
         "regime": regime.value if regime else None,
         "profile": profile,
+        "capital_configured": capital is not None,
         "iv_rank": rank_row["iv_rank"],
         "iv_percentile": rank_row["iv_percentile"],
         "iv_samples": rank_row["iv_samples"],
@@ -360,11 +380,15 @@ def _signals(row: dict, limits: RiskLimits) -> list[dict]:
     return signals
 
 
-def _fill_iv_rank(provider: DataProvider, symbol: str, market_date: date, row: dict) -> None:
+def _fill_iv_rank(
+    provider: DataProvider, symbol: str, market_date: date, row: dict, stop_at: float | None = None
+) -> None:
     """Sem dados suficientes, os campos ficam nulos e a tela mostra quantas amostras já existem."""
     current = None
     history: list[float] = []
     deadline = time.monotonic() + _IV_SECONDS_PER_SYMBOL
+    if stop_at is not None:
+        deadline = min(deadline, stop_at)
     try:
         current = provider.get_atm_iv_on(symbol, market_date)
         for week in range(1, _IV_HISTORY_WEEKS + 1):
@@ -386,7 +410,13 @@ def _fill_iv_rank(provider: DataProvider, symbol: str, market_date: date, row: d
     row.update(iv_rank=result.rank, iv_percentile=result.percentile)
 
 
-def scan_symbol(provider: DataProvider, symbol: str, now: datetime, limits: RiskLimits = RiskLimits()) -> dict:
+def scan_symbol(
+    provider: DataProvider,
+    symbol: str,
+    now: datetime,
+    limits: RiskLimits = RiskLimits(),
+    stop_at: float | None = None,
+) -> dict:
     row: dict = {
         "symbol": symbol,
         "name": None,
@@ -406,9 +436,15 @@ def scan_symbol(provider: DataProvider, symbol: str, now: datetime, limits: Risk
         "iv_samples_needed": MIN_SAMPLES,
         "structure_trend": None,
         "events": [],
+        "source": None,
+        "data_status": "INDISPONIVEL",
         "missing": [],
         "history_warnings": [],
     }
+    if stop_at is not None and time.monotonic() >= stop_at:
+        row["missing"].append(_TIMED_OUT)
+        row["signals"] = []
+        return row
     live = None
     try:
         live = provider.get_market_snapshot(symbol)
@@ -417,6 +453,7 @@ def scan_symbol(provider: DataProvider, symbol: str, now: datetime, limits: Risk
             price=live.price,
             change_percent=live.change_percent,
             market_time=live.provenance.market_time.isoformat(),
+            source=live.provenance.source,
         )
     except DataInsufficientError as error:
         row["missing"].append(f"Cotação: {error.detail}")
@@ -433,7 +470,7 @@ def scan_symbol(provider: DataProvider, symbol: str, now: datetime, limits: Risk
         row["missing"].append(f"Histórico: {error.detail}")
 
     try:
-        expiry = _reference_expiry(provider.get_expirations(symbol), now.date())
+        expiry = _reference_expiry(provider.get_expirations(symbol), market_today(now))
         if expiry is None:
             raise DataInsufficientError("sem vencimento a partir de 14 dias")
         chain, report = _load_chain(provider, symbol, expiry, now)
@@ -444,7 +481,7 @@ def scan_symbol(provider: DataProvider, symbol: str, now: datetime, limits: Risk
             spot_drift=_spot_drift(chain, live),
         )
         if chain.market_date:
-            _fill_iv_rank(provider, symbol, chain.market_date, row)
+            _fill_iv_rank(provider, symbol, chain.market_date, row, stop_at)
     except DataInsufficientError as error:
         row["missing"].append(f"Opções: {error.detail}")
 
@@ -452,14 +489,14 @@ def scan_symbol(provider: DataProvider, symbol: str, now: datetime, limits: Risk
         row["iv_ratio"] = row["atm_iv"] / row["historical_volatility"]
     regime = _regime(bars, row["iv_ratio"])
     row["regime"] = regime.value if regime else None
-    events, events_error = _try_events(provider, symbol, now.date())
+    events, events_error = _try_events(provider, symbol, market_today(now))
     row["events"] = _events_view(events)
     if events_error:
         row["missing"].append(f"Eventos: {events_error}")
     row["signals"] = _signals(row, limits) + [
         {"type": "SALTO_HISTORICO", "detail": detail} for detail in row["history_warnings"]
     ]
-    limit = now.date() + timedelta(days=_SOON_EVENT_DAYS)
+    limit = market_today(now) + timedelta(days=_SOON_EVENT_DAYS)
     for event in events:
         if event.kind == "RESULTADO" and event.day <= limit:
             status = "" if event.confirmed else " (data estimada)"
@@ -476,11 +513,57 @@ def scan_symbol(provider: DataProvider, symbol: str, now: datetime, limits: Risk
             row["signals"].append(
                 {"type": "ROMPIMENTO", "detail": f"{last.kind} de {side}: fechou além de {level} em {last.day}."}
             )
+    row["data_status"] = data_status(row["price"], row["market_time"], row["missing"], now)
     return row
 
 
-def scanner(provider: DataProvider, symbols: list[str], now: datetime) -> dict:
-    """Um ativo sem dados aparece com o motivo, sem derrubar os demais."""
+def _scan_safely(provider: DataProvider, symbol: str, now: datetime, stop_at: float) -> dict:
+    try:
+        return scan_symbol(provider, symbol, now, stop_at=stop_at)
+    except Exception as error:  # noqa: BLE001 - uma falha não pode invalidar a coleta dos outros ativos.
+        return {
+            "symbol": symbol,
+            "name": None,
+            "price": None,
+            "change_percent": None,
+            "market_time": None,
+            "historical_volatility": None,
+            "atm_iv": None,
+            "iv_ratio": None,
+            "regime": None,
+            "expiry": None,
+            "market_date": None,
+            "spot_drift": None,
+            "iv_rank": None,
+            "iv_percentile": None,
+            "iv_samples": 0,
+            "iv_samples_needed": MIN_SAMPLES,
+            "structure_trend": None,
+            "events": [],
+            "source": None,
+            "data_status": "INDISPONIVEL",
+            "missing": [f"Ativo: falha inesperada ({type(error).__name__})"],
+            "history_warnings": [],
+            "signals": [],
+        }
+
+
+def scanner(
+    provider: DataProvider, symbols: list[str], now: datetime, budget_seconds: float = _SCAN_BUDGET_SECONDS
+) -> dict:
+    """Um ativo sem dados aparece com o motivo, sem derrubar os demais.
+
+    `complete` só é verdadeiro se todos os ativos foram analisados por inteiro.
+    """
+    stop_at = time.monotonic() + budget_seconds
     with ThreadPoolExecutor(max_workers=_SCANNER_WORKERS) as pool:
-        rows = list(pool.map(lambda symbol: scan_symbol(provider, symbol, now), symbols))
-    return {"generated_at": now.isoformat(), "rows": rows}
+        rows = list(pool.map(lambda symbol: _scan_safely(provider, symbol, now, stop_at), symbols))
+    timed_out = [row["symbol"] for row in rows if _TIMED_OUT in row["missing"]]
+    incomplete = [row["symbol"] for row in rows if row["missing"]]
+    return {
+        "generated_at": now.isoformat(),
+        "rows": rows,
+        "complete": not incomplete,
+        "incomplete_symbols": incomplete,
+        "timed_out_symbols": timed_out,
+    }
