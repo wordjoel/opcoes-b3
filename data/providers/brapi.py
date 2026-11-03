@@ -153,6 +153,41 @@ class BrapiProvider(DataProvider):
         )
 
     @_guarded
+    def get_option_chain_on(self, underlying: str, expiry: date, day: date) -> OptionChain | None:
+        """Cada linha traz a data do último negócio até aquele pregão: é ela que diz se a série
+        negociou no dia. `lastTradeDate`, em datas passadas, olha para o futuro e não serve."""
+        symbol = normalize_symbol(underlying)
+        params = {"underlying": symbol, "expirationDate": expiry.isoformat(), "date": day.isoformat()}
+        try:
+            chain = self._get("/options/chain", params)
+            analytics = self._get("/options/analytics", params)
+        except _NotFound:
+            return None
+        # Em feriado, a fonte devolve o pregão anterior sem avisar.
+        if chain.get("date") != day.isoformat() or analytics.get("date") != day.isoformat():
+            return None
+        series, rows = chain.get("series") or [], analytics.get("analytics") or []
+        spots = {row["underlyingPrice"] for row in rows if row.get("underlyingPrice")}
+        rates = {row["riskFreeRate"] for row in rows if row.get("riskFreeRate") is not None}
+        times = {row["timeToExpirationYears"] for row in rows if row.get("timeToExpirationYears")}
+        if not series or len(spots) != 1 or len(rates) != 1 or len(times) != 1:
+            return None
+        provenance = self._provenance(SourceKind.EOD, _session_close(day))
+        by_symbol = {row["symbol"]: row for row in rows}
+        quotes = []
+        for item in series:
+            quote = self._quote(item, by_symbol.get(item["symbol"], {}), symbol, provenance)
+            traded = datetime.fromtimestamp(item["date"], _BRT).date() if item.get("date") else None
+            quotes.append(quote.model_copy(update={"last_trade_date": traded}))
+        return OptionChain(
+            underlying=MarketSnapshot(symbol=symbol, price=spots.pop(), provenance=provenance),
+            quotes=quotes,
+            market_date=day,
+            risk_free_rate=rates.pop(),
+            time_to_expiry_years=times.pop(),
+        )
+
+    @_guarded
     def get_expirations(self, underlying: str) -> list[date]:
         payload = self._get("/options/expirations", {"underlying": normalize_symbol(underlying)})
         return [date.fromisoformat(day) for day in payload.get("expirations", [])]

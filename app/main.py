@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Respons
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app import auth, service
+from app import auth, lab, service
 from app.cache import CachingProvider
 from core.clock import market_today
 from core.config import load_local_env
@@ -64,6 +64,27 @@ class LoginRequest(BaseModel):
 class RiskSettingsRequest(BaseModel):
     capital_brl: float = Field(gt=0, le=1_000_000_000)
     max_loss_pct: float = Field(gt=0, le=100)
+
+
+class LabStartRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=12)
+    agent: str
+    key: str
+    capital_brl: float = Field(gt=0, le=1_000_000_000)
+    period_days: int = Field(ge=1, le=365)
+    target_pct: float | None = Field(default=None, gt=0, le=10_000)
+    stop_pct: float | None = Field(default=None, gt=0, le=100)
+    cost_brl: float | None = Field(default=None, ge=0)
+
+
+class LabBacktestRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=12)
+    capital_brl: float = Field(gt=0, le=1_000_000_000)
+    period_days: int = Field(ge=1, le=60)
+    weeks: int = Field(ge=1, le=52)
+    target_pct: float | None = Field(default=None, gt=0, le=10_000)
+    stop_pct: float | None = Field(default=None, gt=0, le=100)
+    cost_brl: float | None = Field(default=None, ge=0)
 
 
 class WatchlistRequest(BaseModel):
@@ -251,6 +272,7 @@ def create_app(
             raise HTTPException(401, "Não autorizado")
         moment = now()
         result = service.scanner(source, watchlist_symbols(db), moment)
+        monitored = lab.monitor(source, db, moment, budget_seconds=15.0)
         # Só a cópia temporária da fonte: o histórico de vol nunca é apagado.
         limit = (moment - CACHE_RETENTION).isoformat()
         db.run("DELETE FROM provider_cache WHERE fetched_at < ?", (limit,))
@@ -260,7 +282,42 @@ def create_app(
             "complete": sum(not row["missing"] for row in rows),
             "iv_samples": sum(row["iv_samples"] for row in rows),
             "scan_complete": result["complete"],
+            "lab": {key: monitored[key] for key in ("active", "marked", "closed", "not_reached")},
         }
+
+    @router.get("/lab/opportunities", dependencies=protected)
+    def lab_opportunities(db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
+        capital, _ = read_capital(db)
+        return lab.discover(source, watchlist_symbols(db), now(), capital)
+
+    @router.post("/lab/strategies", dependencies=protected)
+    def lab_start(body: LabStartRequest, db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
+        plan = lab.LabPlan(body.capital_brl, body.period_days, body.target_pct, body.stop_pct, body.cost_brl)
+        return lab.start_forward(source, db, _valid_symbol(body.symbol), body.agent, body.key, plan, now())
+
+    @router.get("/lab/strategies", dependencies=protected)
+    def lab_list(mode: Literal["FORWARD", "BACKTEST"] | None = None, db: Database = Depends(database)) -> dict:
+        return {"strategies": lab.list_strategies(db, mode)}
+
+    @router.get("/lab/strategies/{identity}", dependencies=protected)
+    def lab_detail(identity: str, db: Database = Depends(database)) -> dict:
+        detail = lab.strategy_detail(db, identity)
+        if detail is None:
+            raise HTTPException(404, "Estratégia não encontrada")
+        return detail
+
+    @router.post("/lab/monitor", dependencies=protected)
+    def lab_monitor(db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
+        return lab.monitor(source, db, now())
+
+    @router.post("/lab/backtests", dependencies=protected)
+    def lab_backtest(body: LabBacktestRequest, db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
+        plan = lab.LabPlan(body.capital_brl, body.period_days, body.target_pct, body.stop_pct, body.cost_brl)
+        return lab.run_backtest(source, db, _valid_symbol(body.symbol), plan, body.weeks, now())
+
+    @router.get("/lab/ranking", dependencies=protected)
+    def lab_ranking(mode: Literal["FORWARD", "BACKTEST"], db: Database = Depends(database)) -> dict:
+        return lab.ranking(db, mode)
 
     @router.get("/assets/{symbol}", dependencies=protected)
     def get_asset(symbol: str, source: DataProvider = Depends(provider)) -> dict:

@@ -292,7 +292,13 @@ class TestCron:
     def test_runs_with_the_secret_and_needs_no_session(self, database):
         response = self.client(database).get("/api/cron/scan", headers={"Authorization": f"Bearer {self.SECRET}"})
         assert response.status_code == 200
-        assert response.json() == {"symbols": 8, "complete": 8, "iv_samples": 416, "scan_complete": True}
+        assert response.json() == {
+            "symbols": 8,
+            "complete": 8,
+            "iv_samples": 416,
+            "scan_complete": True,
+            "lab": {"active": 0, "marked": 0, "closed": 0, "not_reached": 0},
+        }
 
     def test_refuses_missing_or_wrong_secret(self, database):
         client = self.client(database)
@@ -312,7 +318,7 @@ class TestCron:
 
     def test_response_has_no_market_data(self, database):
         response = self.client(database).get("/api/cron/scan", headers={"Authorization": f"Bearer {self.SECRET}"})
-        assert set(response.json()) == {"symbols", "complete", "iv_samples", "scan_complete"}
+        assert set(response.json()) == {"symbols", "complete", "iv_samples", "scan_complete", "lab"}
 
 
 class TestIvRankErrors:

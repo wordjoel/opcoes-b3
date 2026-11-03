@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 
+from core.exceptions import DataInsufficientError
 from core.types import CorporateEvent, MarketSnapshot, OptionChain, PriceBar
 
 
@@ -41,3 +42,7 @@ class DataProvider(ABC):
     @abstractmethod
     def get_upcoming_events(self, symbol: str, today: date) -> list[CorporateEvent]:
         """Resultados, proventos e eventos societários a partir de hoje, em ordem de data."""
+
+    def get_option_chain_on(self, underlying: str, expiry: date, day: date) -> OptionChain | None:
+        """Grade de um pregão passado. None = a fonte não tem esse pregão ou vencimento."""
+        raise DataInsufficientError("esta fonte não oferece histórico de opções")

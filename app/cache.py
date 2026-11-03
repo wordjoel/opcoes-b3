@@ -127,3 +127,20 @@ class CachingProvider(DataProvider):
             "DELETE FROM provider_cache WHERE key LIKE ? AND key <> ?", (f"events:{symbol}:%", key)
         )
         return fresh
+
+    def get_option_chain_on(self, underlying: str, expiry: date, day: date) -> OptionChain | None:
+        """Pregão encerrado não muda: fica guardado para sempre, inclusive a ausência."""
+        key = (underlying, expiry.isoformat(), day.isoformat())
+        rows = self._database.fetch("SELECT payload FROM option_history WHERE symbol = ? AND expiry = ? AND day = ?", key)
+        if rows:
+            try:
+                return OptionChain.model_validate_json(rows[0][0]) if rows[0][0] else None
+            except ValueError:
+                self._database.run("DELETE FROM option_history WHERE symbol = ? AND expiry = ? AND day = ?", key)
+        fresh = self._inner.get_option_chain_on(underlying, expiry, day)
+        self._database.run(
+            "INSERT INTO option_history (symbol, expiry, day, payload, fetched_at) VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT (symbol, expiry, day) DO NOTHING",
+            (*key, fresh.model_dump_json() if fresh else None, self._now().isoformat()),
+        )
+        return fresh
