@@ -38,4 +38,10 @@ npm run build
 
 ## Publicar
 
-Cadastre as variáveis de `.env.example` no projeto da Vercel, exceto `B3_INSECURE_COOKIE`, gere um `CRON_SECRET` aleatório e rode `db.migrate` apontando para o Turso antes do deploy.
+Em um terminal próprio, na pasta do projeto, rode `.venv/Scripts/python -m scripts.configurar_vercel`. Ele pede a senha e a chave da brapi sem mostrá-las, gera os demais segredos e cadastra tudo em preview. Depois:
+
+1. `npx vercel deploy` cria o preview, para testar.
+2. `.venv/Scripts/python -m scripts.configurar_vercel --producao` cadastra também em produção.
+3. `npx vercel deploy --prod` publica.
+
+Migrations não rodam sozinhas: `.venv/Scripts/python -m db.migrate`. Para voltar ao deploy anterior: `npx vercel rollback`.
