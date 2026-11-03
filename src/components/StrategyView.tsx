@@ -3,281 +3,434 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { motion } from 'motion/react';
-import { AreaChart, Area, ReferenceLine, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Info, HelpCircle, CheckCircle2, ShieldAlert, Zap, BookOpen, Calculator, Target, BarChart3, TrendingUp, Activity } from 'lucide-react';
-import { Strategy } from '../types';
-import { formatCurrency, cn } from '../lib/utils';
+import { CheckCircle2, ShieldAlert, XCircle } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { api, useResource } from '../services/api';
+import { Candidate, ChainQuote, ChainView, Profile, StrategiesView } from '../types';
+import {
+  cn,
+  formatChange,
+  formatCompact,
+  formatCurrency,
+  formatDay,
+  formatLimit,
+  formatNumber,
+  formatRatio,
+  REGIME_LABEL,
+  TREND_LABEL,
+} from '../lib/utils';
+import { ErrorNotice, Loading, Panel, Signed, Stat } from './Common';
+import { OpenInterestPanel, PnlHeatmap, SkewChart } from './OptionAnalytics';
 
 interface StrategyViewProps {
-  strategy: Strategy | null;
-  loading: boolean;
+  symbols: string[];
+  symbol: string | null;
+  onSymbol: (symbol: string) => void;
 }
 
-export function StrategyView({ strategy, loading }: StrategyViewProps) {
-  if (loading) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center p-12 space-y-8 min-h-[600px]">
-        <div className="relative">
-          <div className="w-24 h-24 border-4 border-slate-800 rounded-full" />
-          <motion.div 
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-            className="absolute inset-0 w-24 h-24 border-4 border-sky-500 border-t-transparent rounded-full shadow-[0_0_20px_rgba(56,189,248,0.2)]"
-          />
-        </div>
-        <div className="text-center space-y-3">
-          <h3 className="text-2xl font-bold text-white tracking-tight">IA Analisando Cenários</h3>
-          <p className="text-slate-400 max-w-sm mx-auto leading-relaxed text-sm">O robô de estratégia está varrendo a grade para encontrar strikes com a melhor relação risco/retorno.</p>
-        </div>
-      </div>
-    );
-  }
+const CONTROL = 'bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-sky-500';
 
-  if (!strategy) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center p-12 text-center min-h-[600px]">
-        <div className="w-24 h-24 bg-slate-900 border border-slate-800 rounded-3xl flex items-center justify-center mb-8 shadow-2xl relative group">
-          <Zap className="w-10 h-10 text-slate-700 group-hover:text-sky-500 transition-colors" />
-          <div className="absolute -top-1 -right-1 w-4 h-4 bg-sky-500/20 rounded-full animate-ping" />
-        </div>
-        <h3 className="text-2xl font-bold text-white tracking-tight">Seleção de Ativo Pendente</h3>
-        <p className="text-slate-400 max-w-md mt-3 leading-relaxed">Selecione um ativo no monitor para que nossos robôs automatizados calibrem uma estratégia baseada em probabilidades.</p>
-      </div>
-    );
-  }
+export function StrategyView({ symbols, symbol, onSymbol }: StrategyViewProps) {
+  const expirations = useResource(symbol, () => api.expirations(symbol!));
+  const [expiry, setExpiry] = useState<string | null>(null);
+
+  useEffect(() => {
+    const days = expirations.data?.expirations ?? [];
+    if (days.length === 0) {
+      setExpiry(null);
+      return;
+    }
+    // Começa no primeiro vencimento a partir de 14 dias, como o scanner.
+    const limit = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+    setExpiry(days.find((day) => day >= limit) ?? days[days.length - 1]);
+  }, [expirations.data]);
+
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const key = symbol && expiry ? `${symbol}:${expiry}` : null;
+  const strategies = useResource(key && `${key}:${profile}`, () => api.strategies(symbol!, expiry!, profile));
+  const chain = useResource(key, () => api.chain(symbol!, expiry!));
 
   return (
-    <div className="flex flex-col gap-1 h-full font-mono text-[11px] bg-[#1a1a1a] p-1 border border-slate-800 rounded-md overflow-hidden select-none">
-      {/* Header Profit Style */}
-      <div className="bg-[#2a2a2a] p-2 flex items-center gap-6 border border-[#3a3a3a]">
-        <div className="flex items-center gap-2">
-          <span className="bg-orange-500 text-black px-1 font-bold rounded-sm"> {strategy.ticker} </span>
-          <span className="text-white font-bold text-sm">36,20</span>
-          <span className="text-red-500 font-bold">-0,71%</span>
+    <div className="space-y-6">
+      <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-bold text-white tracking-tight">Estratégias</h2>
+          <p className="text-slate-400 mt-1">Calculadas com regras fixas, sem IA. Nenhuma ordem é enviada.</p>
         </div>
-        <div className="flex items-center gap-4 text-slate-400 text-[10px]">
-          <div>BID <span className="text-white">36,20</span></div>
-          <div>ASK <span className="text-white">36,21</span></div>
-          <div>VOL. HIST <span className="text-white">33,40%</span></div>
-          <div>VOL. IMP <span className="text-sky-400">66,33%</span></div>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-slate-500">Layout:</span>
-          <select className="bg-[#1a1a1a] border border-[#3a3a3a] text-white px-2 py-0.5 rounded cursor-pointer outline-none">
-            <option>C. Abertos / Delta</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Strategy Selector Profit Style */}
-      <div className="bg-[#2a2a2a] p-1 flex items-center gap-4 border border-[#3a3a3a]">
-        <div className="flex items-center gap-2">
-          <span className="text-slate-400 uppercase text-[10px]">Estratégia:</span>
-          <div className="bg-[#1a1a1a] border border-sky-500/50 text-sky-400 px-3 py-1 rounded font-bold min-w-[200px] flex justify-between items-center cursor-pointer">
-            {strategy.type} <Info className="w-3 h-3" />
-          </div>
-        </div>
-        <div className="bg-sky-600/20 text-sky-400 px-3 py-1 rounded border border-sky-600/30 font-bold cursor-pointer hover:bg-sky-600/30">
-          CRIAR
-        </div>
-        <div className="ml-auto flex items-center gap-4">
-          <div className="flex items-center gap-2">
-             <span className="text-slate-500">Strikes:</span>
-             <input type="number" defaultValue="8" className="w-12 bg-[#1a1a1a] border border-[#3a3a3a] text-white text-center px-1 rounded outline-none" />
-          </div>
-          <label className="flex items-center gap-2 text-slate-400 cursor-pointer">
-            <input type="checkbox" defaultChecked className="accent-sky-500" /> Código do Ativo
+        <div className="flex flex-wrap gap-2">
+          <label className="text-xs text-slate-400">
+            Seleção de strikes
+            <select
+              value={profile ?? ''}
+              onChange={(event) => setProfile((event.target.value || null) as Profile | null)}
+              className={cn(CONTROL, 'block mt-1')}
+            >
+              <option value="">Distância de 5% do ativo</option>
+              <option value="CONSERVATIVE">Delta: conservador</option>
+              <option value="MODERATE">Delta: moderado</option>
+              <option value="AGGRESSIVE">Delta: agressivo</option>
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            Ativo
+            <select value={symbol ?? ''} onChange={(event) => onSymbol(event.target.value)} className={cn(CONTROL, 'block mt-1')}>
+              {symbol === null && <option value="">Selecione</option>}
+              {symbols.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400">
+            Vencimento
+            <select
+              value={expiry ?? ''}
+              disabled={!expiry}
+              onChange={(event) => setExpiry(event.target.value)}
+              className={cn(CONTROL, 'block mt-1 disabled:opacity-50')}
+            >
+              {(expirations.data?.expirations ?? []).map((day) => (
+                <option key={day} value={day}>
+                  {formatDay(day)}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
+      </header>
+
+      {!symbol && <Panel>Selecione um ativo.</Panel>}
+      {expirations.loading && <Loading label="Buscando vencimentos..." />}
+      {expirations.error && <ErrorNotice error={expirations.error} onRetry={expirations.reload} />}
+      {symbol && expirations.data && !expiry && <Panel>A fonte não listou vencimentos futuros para {symbol}.</Panel>}
+      {key && strategies.loading && !strategies.data && <Loading label="Calculando estruturas..." />}
+      {strategies.error && <ErrorNotice error={strategies.error} onRetry={strategies.reload} />}
+      {strategies.data && <Analysis view={strategies.data} />}
+      {chain.data && <OpenInterestPanel summary={chain.data.open_interest} />}
+      {chain.data && <SkewChart chain={chain.data} />}
+      {chain.data && <ChainTable chain={chain.data} />}
+    </div>
+  );
+}
+
+function Analysis({ view }: { view: StrategiesView }) {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const selected = view.candidates.find((item) => item.key === selectedKey) ?? view.candidates[0];
+  const approved = view.candidates.filter((item) => item.risk.is_approved).length;
+  const drifted = view.candidates.length > 0 && view.candidates.every((item) => item.risk.rejection_reason?.includes('defasados'));
+
+  return (
+    <div className="space-y-6">
+      <div role="status" className="p-4 rounded-xl border border-slate-700 bg-slate-900 text-sm text-slate-200">
+        Prêmios do <strong>fechamento de {formatDay(view.market_date)}</strong>, com o ativo a {formatCurrency(view.spot)}: são
+        indicativos e não garantem execução. A grade do pregão do dia entra por volta das 21h.
+      </div>
+      {drifted && (
+        <div role="alert" className="flex items-start gap-3 p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-sm text-amber-100">
+          <ShieldAlert className="w-5 h-5 shrink-0 text-amber-400" />
+          <p>
+            O ativo está em {formatCurrency(view.live_price)}, <strong>{formatChange((view.spot_drift ?? 0) * 100)}</strong> em relação à
+            grade. Com essa diferença, os prêmios estão defasados e todas as estruturas ficam reprovadas até a próxima grade.
+          </p>
+        </div>
+      )}
+
+      <MarketContext view={view} />
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Stat label="Vol implícita" value={formatRatio(view.atm_iv)} hint="Call e put no dinheiro" />
+        <Stat label="Vol histórica" value={formatRatio(view.historical_volatility)} hint="1 ano" />
+        <Stat label="Regime" value={view.regime ? REGIME_LABEL[view.regime] : '—'} hint={`Impl./Hist. ${formatNumber(view.iv_ratio)}`} />
+        <Stat label="Juros" value={formatRatio(view.risk_free_rate, 2)} hint="Informado pela fonte" />
       </div>
 
-      {/* Grade de Opções (Matrix) */}
-      <div className="flex-1 overflow-auto bg-[#131313] border border-[#3a3a3a]">
-        <table className="w-full text-left border-collapse">
-          <thead className="sticky top-0 bg-[#2a2a2a] text-slate-400 text-[10px] uppercase font-bold border-b border-[#3a3a3a] z-10">
-             <tr>
-               <th className="p-1 px-3 text-center border-r border-[#3a3a3a]" colSpan={6}>CALLS</th>
-               <th className="p-1 px-3 text-center bg-[#1a1a1a] text-white" rowSpan={1}>STRIKE</th>
-               <th className="p-1 px-3 text-center border-l border-[#3a3a3a]" colSpan={6}>PUTS</th>
-             </tr>
-             <tr className="bg-[#232323]">
-               <th className="p-1 font-normal">Ativo</th>
-               <th className="p-1 font-normal">Tipo</th>
-               <th className="p-1 font-normal text-right">C.Ab.</th>
-               <th className="p-1 font-normal text-right">Delta</th>
-               <th className="p-1 font-normal text-right">Bid</th>
-               <th className="p-1 font-normal text-right border-r border-[#3a3a3a]">Ask</th>
-               <th className="p-1 bg-[#1a1a1a]"></th>
-               <th className="p-1 font-normal text-left border-l border-[#3a3a3a]">Bid</th>
-               <th className="p-1 font-normal text-left">Ask</th>
-               <th className="p-1 font-normal text-left">Delta</th>
-               <th className="p-1 font-normal text-left">C.Ab.</th>
-               <th className="p-1 font-normal">Tipo</th>
-               <th className="p-1 font-normal">Ativo</th>
-             </tr>
-          </thead>
-          <tbody>
-            {[...Array(10)].map((_, i) => {
-              const strike = strategy.legs[0].option.strike - (5 - i) * 0.5;
-              const isStrategyStrike = strategy.legs.some(leg => Math.abs(leg.option.strike - strike) < 0.1);
-              
-              return (
-                <tr key={i} className={cn(
-                  "border-b border-[#1f1f1f] hover:bg-[#2a2a2a]/50 text-[10px]",
-                  isStrategyStrike && "bg-sky-900/20"
-                )}>
-                  <td className="p-1 px-3 text-slate-500">BBASL{350 + i}</td>
-                  <td className="p-1 text-center"><span className="w-2 h-2 bg-blue-500 rounded-full inline-block" /></td>
-                  <td className="p-1 text-right text-slate-400">2,56M</td>
-                  <td className="p-1 text-right text-slate-400">0,50</td>
-                  <td className="p-1 text-right text-red-500 font-bold">0,86</td>
-                  <td className="p-1 text-right text-red-500 font-bold border-r border-[#3a3a3a]">0,88</td>
-                  
-                  <td className="p-1 text-center bg-[#1a1a1a] text-white font-bold">{strike.toFixed(2)}</td>
-                  
-                  <td className="p-1 text-left text-emerald-500 font-bold border-l border-[#3a3a3a]">0,94</td>
-                  <td className="p-1 text-left text-emerald-500 font-bold">0,95</td>
-                  <td className="p-1 text-left text-slate-400">-0,50</td>
-                  <td className="p-1 text-left text-slate-400">733k</td>
-                  <td className="p-1 text-center"><span className="w-2 h-2 bg-blue-500 rounded-full inline-block" /></td>
-                  <td className="p-1 px-3 text-slate-500">BBASX{350 + i}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Painel Inferior Profit Style */}
-      <div className="bg-[#2a2a2a] p-3 border border-[#3a3a3a] grid grid-cols-12 gap-4">
-        {/* Gráfico Mini Payoff */}
-        <div className="col-span-3 bg-black/40 rounded-sm border border-[#3a3a3a] h-[140px] p-2 relative">
-          <div className="text-[9px] text-slate-500 mb-1">PROJEÇÃO PAYOFF</div>
-          <div className="h-full w-full opacity-60">
-             <ResponsiveContainer width="100%" height="90%">
-                <AreaChart data={[
-                  {x: 0, y: -strategy.maxLoss},
-                  {x: 50, y: 0},
-                  {x: 80, y: strategy.maxProfit},
-                  {x: 100, y: strategy.maxProfit}
-                ]}>
-                  <Area type="step" dataKey="y" stroke="#00ff00" fill="#00ff00" fillOpacity={0.1} />
-                  <ReferenceLine y={0} stroke="#555" />
-                </AreaChart>
-             </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Resumo da Estratégia */}
-        <div className="col-span-6 flex flex-col gap-2">
-           <div className="grid grid-cols-4 gap-2 text-[10px]">
-              <div className="bg-[#1a1a1a] p-1 border border-[#3a3a3a] text-center">
-                 <div className="text-slate-500 uppercase text-[9px]">Ganho Máx</div>
-                 <div className="text-emerald-500 font-bold">{formatCurrency(strategy.maxProfit)}</div>
-              </div>
-              <div className="bg-[#1a1a1a] p-1 border border-[#3a3a3a] text-center">
-                 <div className="text-slate-500 uppercase text-[9px]">Perda Máx</div>
-                 <div className="text-red-500 font-bold">{formatCurrency(strategy.maxLoss)}</div>
-              </div>
-              <div className="bg-[#1a1a1a] p-1 border border-[#3a3a3a] text-center">
-                 <div className="text-slate-500 uppercase text-[9px]">Delta</div>
-                 <div className="text-white">0,05</div>
-              </div>
-              <div className="bg-[#1a1a1a] p-1 border border-[#3a3a3a] text-center">
-                 <div className="text-slate-500 uppercase text-[9px]">Theta</div>
-                 <div className="text-white">0,00</div>
-              </div>
-           </div>
-
-           <div className="bg-[#1a1a1a] p-2 border border-[#3a3a3a] flex-1 overflow-auto">
-              <table className="w-full text-[9px]">
-                <thead className="text-slate-500">
-                  <tr className="border-b border-[#333]">
-                    <th className="text-left py-1">Lado</th>
-                    <th className="text-left font-normal py-1">C/P</th>
-                    <th className="text-left font-normal py-1">Ativo</th>
-                    <th className="text-right font-normal py-1">Strike</th>
-                    <th className="text-right font-normal py-1">Preço</th>
-                    <th className="text-right font-normal py-1">Qtd</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {strategy.legs.map((leg, idx) => (
-                    <tr key={idx} className="text-white font-bold">
-                      <td className="py-1">
-                        <span className={cn(
-                          "w-4 h-4 inline-flex items-center justify-center rounded-sm text-[8px]",
-                          leg.action === 'BUY' ? "bg-emerald-500 text-black" : "bg-red-500 text-black"
-                        )}>{leg.action[0]}</span>
-                      </td>
-                      <td className="py-1">{leg.option.type === 'CALL' ? 'Call' : 'Put'}</td>
-                      <td className="py-1">{leg.option.ticker}</td>
-                      <td className="py-1 text-right">{leg.option.strike.toFixed(2)}</td>
-                      <td className="py-1 text-right">R$ {leg.option.premium.toFixed(2)}</td>
-                      <td className="py-1 text-right underline cursor-pointer">100</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-           </div>
-        </div>
-
-        {/* Boleta Lateral e POP */}
-        <div className="col-span-3 flex flex-col gap-2">
-           <div className="bg-[#1a1a1a] p-2 border border-yellow-500/50 flex flex-col items-center justify-center rounded-sm">
-              <div className="text-yellow-500 font-bold text-[9px] uppercase tracking-widest">POP</div>
-              <div className="text-2xl font-bold text-white leading-none">{strategy.probability}%</div>
-              <div className="text-[8px] text-slate-500">PROB. DE LUCRO</div>
-           </div>
-
-           <div className="bg-[#1a1a1a] p-2 border border-[#3a3a3a] flex flex-col gap-1">
-              <div className="flex justify-between text-[9px]">
-                <span className="text-slate-500">Custo Mercado:</span>
-                <span className="text-white">R$ -0,15</span>
-              </div>
-              <div className="flex justify-between text-[9px]">
-                <span className="text-slate-500">Custo Alvo:</span>
-                <span className="text-white">-0,15</span>
-              </div>
-              <div className="mt-1 flex justify-between text-[10px] font-bold border-t border-[#333] pt-1">
-                <span className="text-slate-400">Total:</span>
-                <span className="text-emerald-500">R$ -15,00</span>
-              </div>
-           </div>
-
-           <button className="bg-sky-600 hover:bg-sky-500 text-white font-bold py-2 rounded-sm text-xs shadow-lg transition-all active:scale-95">
-              Enviar Ordem
-           </button>
-        </div>
-      </div>
-
-      {/* Footer Tabs Profit Style */}
-      <div className="bg-[#2a2a2a] flex items-center px-2 py-1 border border-[#3a3a3a] gap-1">
-         <div className="bg-[#1a1a1a] text-white px-3 py-0.5 text-[9px] border-x border-t border-sky-500/50 rounded-t-sm font-bold">Grade</div>
-         <div className="text-slate-500 px-3 py-0.5 text-[9px] hover:text-white cursor-pointer transition-colors">Gráfico</div>
-         <div className="text-slate-500 px-3 py-0.5 text-[9px] hover:text-white cursor-pointer transition-colors">Vols</div>
-         <div className="text-slate-500 px-3 py-0.5 text-[9px] hover:text-white cursor-pointer transition-colors">Acompanhamento</div>
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+        <Panel title={`Estruturas: ${approved} de ${view.candidates.length} aprovadas`} className="xl:col-span-4">
+          <ul className="space-y-2">
+            {view.candidates.map((item) => (
+              <li key={item.key}>
+                <button
+                  onClick={() => setSelectedKey(item.key)}
+                  aria-current={selected?.key === item.key}
+                  className={cn(
+                    'w-full p-3 rounded-xl border text-left transition-colors',
+                    selected?.key === item.key ? 'border-sky-500/50 bg-slate-800/60' : 'border-slate-800 hover:bg-slate-800/40',
+                  )}
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-sm text-white">{item.name}</span>
+                    {item.risk.is_approved ? (
+                      <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle2 className="w-3.5 h-3.5" /> Aprovada</span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-xs text-red-400"><XCircle className="w-3.5 h-3.5" /> Reprovada</span>
+                    )}
+                  </span>
+                  <span className="block text-xs text-slate-400 mt-1">
+                    Ganho {formatLimit(item.max_profit)} · Perda {formatLimit(item.max_loss)}
+                    {item.fits_regime && ' · compatível com o regime'}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {view.unavailable.length > 0 && (
+            <div className="mt-4 text-xs text-slate-400 space-y-1">
+              <p className="font-semibold text-slate-300">Sem strikes na grade:</p>
+              {view.unavailable.map((item) => (
+                <p key={item.key}>{item.name}: {item.reason}</p>
+              ))}
+            </div>
+          )}
+        </Panel>
+        <div className="xl:col-span-8 min-w-0">{selected ? <Detail item={selected} spot={view.spot} /> : <Panel>Nenhuma estrutura pôde ser montada.</Panel>}</div>
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value, icon: Icon, color }: { label: string, value: string, icon: any, color: string }) {
-  const colors: Record<string, string> = {
-    emerald: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    red: "bg-red-500/10 text-red-400 border-red-500/20",
-    sky: "bg-sky-500/10 text-sky-400 border-sky-500/20",
-    slate: "bg-slate-800 text-slate-400 border-slate-700"
-  };
-
+function MarketContext({ view }: { view: StrategiesView }) {
+  const lastBreak = view.structure?.events.at(-1);
   return (
-    <div className={cn("p-4 rounded-2xl border flex flex-col gap-2", colors[color])}>
-      <div className="flex items-center gap-2 opacity-80">
-        <Icon className="w-4 h-4" />
-        <span className="text-[10px] font-bold uppercase tracking-widest">{label}</span>
+    <Panel title="Contexto do ativo">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+        <div>
+          <p className="text-slate-400">Estrutura diária</p>
+          <p className="font-bold text-white">{view.structure?.trend ? TREND_LABEL[view.structure.trend] : 'Sem rompimento'}</p>
+          {lastBreak && (
+            <p className="text-xs text-slate-400">
+              {lastBreak.kind === 'CHOCH' ? 'CHoCH' : 'BOS'} em {formatDay(lastBreak.day)}, além de {formatCurrency(lastBreak.level)}
+            </p>
+          )}
+        </div>
+        <div>
+          <p className="text-slate-400">IV Rank</p>
+          <p className="font-bold text-white">
+            {view.iv_rank !== null ? formatNumber(view.iv_rank, 0) : `${view.iv_samples} de ${view.iv_samples_needed} amostras`}
+          </p>
+          {view.iv_percentile !== null && <p className="text-xs text-slate-400">Percentil {formatNumber(view.iv_percentile, 0)}</p>}
+        </div>
+        <div>
+          <p className="text-slate-400">Próximos eventos</p>
+          {view.events_error ? (
+            <p className="text-amber-200">DADOS INSUFICIENTES: {view.events_error}</p>
+          ) : view.events.length === 0 ? (
+            <p className="text-slate-200">Nenhum informado pela fonte nos próximos 180 dias</p>
+          ) : (
+            <ul className="text-slate-200">
+              {view.events.slice(0, 4).map((event) => (
+                <li key={`${event.day}-${event.label}`}>
+                  {formatDay(event.day)}: {event.label}
+                  {!event.confirmed && <span className="text-slate-400"> (data estimada)</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
-      <p className="text-lg font-bold truncate">{value}</p>
+    </Panel>
+  );
+}
+
+function Detail({ item, spot }: { item: Candidate; spot: number }) {
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <h3 className="text-lg font-bold text-white">{item.name}</h3>
+        <p className="text-sm text-slate-400 mt-1">{item.rationale}</p>
+        <p className={cn('text-sm mt-3 font-semibold', item.risk.is_approved ? 'text-emerald-300' : 'text-red-300')}>
+          {item.risk.verdict}
+          {item.risk.rejection_reason && <span className="font-normal"> Motivo: {item.risk.rejection_reason}.</span>}
+        </p>
+      </Panel>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Stat label="Ganho máximo" value={formatLimit(item.max_profit)} />
+        <Stat label="Perda máxima" value={formatLimit(item.max_loss)} />
+        <Stat
+          label={item.net_premium >= 0 ? 'Débito' : 'Crédito'}
+          value={formatCurrency(Math.abs(item.net_premium))}
+          hint="Na montagem"
+        />
+        <Stat label="Prob. de lucro" value={formatRatio(item.probability_of_profit, 0)} hint="Neutra ao risco; não é previsão" />
+      </div>
+
+      <Panel title="Resultado no vencimento (R$)">
+        <div className="h-[280px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={item.payoff} margin={{ top: 16, right: 8, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke="#1E293B" vertical={false} />
+              <XAxis
+                dataKey="price"
+                type="number"
+                domain={['dataMin', 'dataMax']}
+                stroke="#64748B"
+                fontSize={12}
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={(value: number) => value.toFixed(0)}
+              />
+              <YAxis stroke="#64748B" fontSize={12} tickLine={false} axisLine={false} width={56} />
+              <ReferenceLine y={0} stroke="#64748B" />
+              <ReferenceLine
+                x={spot}
+                stroke="#94A3B8"
+                strokeDasharray="4 4"
+                label={{ value: 'Ativo na grade', fill: '#CBD5E1', fontSize: 11, position: 'top' }}
+              />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#0F172A', border: '1px solid #334155', borderRadius: 8 }}
+                labelStyle={{ color: '#CBD5E1' }}
+                itemStyle={{ color: '#F8FAFC' }}
+                labelFormatter={(price) => `Ativo a ${formatCurrency(Number(price))}`}
+                formatter={(value) => [formatCurrency(Number(value)), 'Resultado']}
+              />
+              <Line type="linear" dataKey="pnl" stroke="#0284C7" strokeWidth={2} dot={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+        <p className="text-xs text-slate-400 mt-2">
+          Breakeven: {item.breakevens.length ? item.breakevens.map((value) => formatCurrency(value)).join(' e ') : 'nenhum'} · Liquidez:{' '}
+          {formatNumber(item.risk.liquidity_score)} de 1,00
+        </p>
+      </Panel>
+
+      {item.heatmap && <PnlHeatmap heatmap={item.heatmap} />}
+
+      <Panel title="Pernas" className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[640px]">
+          <thead className="text-xs text-slate-400">
+            <tr>
+              <th scope="col" className="text-left font-semibold py-1">Lado</th>
+              <th scope="col" className="text-left font-semibold py-1">Série</th>
+              <th scope="col" className="text-left font-semibold py-1">Tipo</th>
+              <th scope="col" className="text-right font-semibold py-1">Strike</th>
+              <th scope="col" className="text-right font-semibold py-1">Prêmio</th>
+              <th scope="col" className="text-right font-semibold py-1">Qtd.</th>
+              <th scope="col" className="text-right font-semibold py-1">Vol impl.</th>
+              <th scope="col" className="text-right font-semibold py-1">Delta</th>
+              <th scope="col" className="text-right font-semibold py-1">Prob. ITM</th>
+            </tr>
+          </thead>
+          <tbody className="text-slate-200 font-mono">
+            {item.legs.map((leg) => (
+              <tr key={`${leg.symbol}-${leg.action}`} className="border-t border-slate-800">
+                <td className="py-1.5 font-sans">{leg.action === 'BUY' ? 'Compra' : 'Venda'}</td>
+                <td className="py-1.5">{leg.symbol}</td>
+                <td className="py-1.5">{leg.kind === 'CALL' ? 'Call' : 'Put'}</td>
+                <td className="py-1.5 text-right">{formatNumber(leg.strike)}</td>
+                <td className="py-1.5 text-right">{formatNumber(leg.premium)}</td>
+                <td className="py-1.5 text-right">{leg.quantity}</td>
+                <td className="py-1.5 text-right">{formatRatio(leg.iv)}</td>
+                <td className="py-1.5 text-right">{formatNumber(leg.delta)}</td>
+                <td className="py-1.5 text-right">{formatRatio(leg.probability_itm, 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Panel title="Cenários de estresse">
+          <ul className="text-sm space-y-1">
+            {Object.entries(item.risk.stress).map(([label, value]) => (
+              <li key={label} className="flex justify-between gap-4">
+                <span className="text-slate-400">{label}</span>
+                <span className="font-mono font-semibold"><Signed value={value}>{formatCurrency(value)}</Signed></span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+        <Panel title="Gregas da posição">
+          {item.greeks ? (
+            <ul className="text-sm space-y-1">
+              <GreekRow label="Delta (R$ por R$ 1,00 no ativo)" value={item.greeks.delta} />
+              <GreekRow label="Gama" value={item.greeks.gamma} />
+              <GreekRow label="Theta (R$ por dia útil)" value={item.greeks.theta_per_business_day} />
+              <GreekRow label="Vega (R$ por ponto de vol)" value={item.greeks.vega_per_vol_point} />
+            </ul>
+          ) : (
+            <p className="text-sm text-amber-200">DADOS INSUFICIENTES: falta volatilidade implícita em alguma perna.</p>
+          )}
+        </Panel>
+      </div>
+
+      {(item.risk.warnings.length > 0 || item.assumptions.length > 0) && (
+        <Panel title="Avisos e premissas">
+          <ul className="text-sm text-slate-300 list-disc pl-4 space-y-1">
+            {[...item.risk.warnings, ...item.assumptions].map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
+        </Panel>
+      )}
     </div>
   );
+}
+
+function GreekRow({ label, value }: { label: string; value: number }) {
+  return (
+    <li className="flex justify-between gap-4">
+      <span className="text-slate-400">{label}</span>
+      <span className="font-mono text-slate-200">{formatNumber(value)}</span>
+    </li>
+  );
+}
+
+function ChainTable({ chain }: { chain: ChainView }) {
+  // Só o miolo da grade: séries muito longe do ativo atrapalham a leitura.
+  const rows = useMemo(() => {
+    const byStrike = new Map<number, { call?: ChainQuote; put?: ChainQuote }>();
+    for (const quote of chain.quotes) {
+      if (Math.abs(quote.strike / chain.spot - 1) > 0.15) continue;
+      const row = byStrike.get(quote.strike) ?? {};
+      if (quote.kind === 'CALL') row.call = quote;
+      else row.put = quote;
+      byStrike.set(quote.strike, row);
+    }
+    return [...byStrike.entries()].sort(([a], [b]) => a - b);
+  }, [chain]);
+  const unusable = chain.quotes.filter((quote) => !quote.usable).length;
+
+  return (
+    <Panel title={`Grade de ${chain.symbol}: vencimento ${formatDay(chain.expiry)}, pregão ${formatDay(chain.market_date)}`} className="overflow-x-auto">
+      <p className="text-xs text-slate-400 mb-3">
+        Strikes até 15% do ativo. {unusable} de {chain.quotes.length} séries não negociaram no pregão ou falharam na validação e aparecem
+        apagadas: não entram nas estruturas. O preço é o último negócio do dia.
+      </p>
+      <table className="w-full text-xs font-mono min-w-[720px]">
+        <thead className="text-slate-400">
+          <tr>
+            <th scope="col" className="text-left font-semibold p-1">Call</th>
+            <th scope="col" className="text-right font-semibold p-1">Em aberto</th>
+            <th scope="col" className="text-right font-semibold p-1">Delta</th>
+            <th scope="col" className="text-right font-semibold p-1">Fech.</th>
+            <th scope="col" className="text-center font-semibold p-1 text-white">Strike</th>
+            <th scope="col" className="text-left font-semibold p-1">Fech.</th>
+            <th scope="col" className="text-left font-semibold p-1">Delta</th>
+            <th scope="col" className="text-left font-semibold p-1">Em aberto</th>
+            <th scope="col" className="text-right font-semibold p-1">Put</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([strike, { call, put }]) => (
+            <tr key={strike} className="border-t border-slate-800/60">
+              <td className={cn('p-1', dim(call))}>{call?.symbol ?? '—'}</td>
+              <td className={cn('p-1 text-right', dim(call))}>{formatCompact(call?.open_interest)}</td>
+              <td className={cn('p-1 text-right', dim(call))}>{formatNumber(call?.delta)}</td>
+              <td className={cn('p-1 text-right font-bold', dim(call))}>{formatNumber(call?.close)}</td>
+              <td className="p-1 text-center font-bold text-white bg-slate-800/50">{formatNumber(strike)}</td>
+              <td className={cn('p-1 font-bold', dim(put))}>{formatNumber(put?.close)}</td>
+              <td className={cn('p-1', dim(put))}>{formatNumber(put?.delta)}</td>
+              <td className={cn('p-1', dim(put))}>{formatCompact(put?.open_interest)}</td>
+              <td className={cn('p-1 text-right', dim(put))}>{put?.symbol ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+
+function dim(quote?: ChainQuote) {
+  return quote?.usable ? 'text-slate-200' : 'text-slate-600';
 }

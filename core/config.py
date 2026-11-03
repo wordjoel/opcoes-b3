@@ -35,3 +35,5 @@ class DataQualityLimits:
     max_source_divergence: float = 0.005
     # Intervalo em dias corridos entre barras que merece aviso.
     max_bar_gap_days: int = 5
+    # Variação de um dia que pede conferência: pode ser fato de mercado ou erro da fonte.
+    max_daily_move: float = 0.30

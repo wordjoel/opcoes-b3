@@ -1,0 +1,99 @@
+import { useCallback, useEffect, useState } from 'react';
+import { AssetOverview, ChainView, Profile, ScannerResponse, StrategiesView } from '../types';
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    /** "DADOS INSUFICIENTES" quando os dados não permitem concluir. */
+    readonly label?: string,
+    readonly reasons: string[] = [],
+  ) {
+    super(message);
+  }
+}
+
+let onUnauthorized: () => void = () => {};
+
+export function setUnauthorizedHandler(handler: () => void) {
+  onUnauthorized = handler;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      ...init,
+      credentials: 'same-origin',
+      headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
+    });
+  } catch {
+    throw new ApiError(0, 'Sem conexão com o servidor.');
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/login')) onUnauthorized();
+    const detail = typeof body?.detail === 'string' ? body.detail : `Erro ${response.status} no servidor.`;
+    throw new ApiError(response.status, detail, body?.label, body?.reasons ?? []);
+  }
+  return body as T;
+}
+
+const post = (body?: unknown): RequestInit => ({ method: 'POST', body: body ? JSON.stringify(body) : undefined });
+
+export const api = {
+  session: () => request<{ authenticated: boolean; login_ready: boolean }>('/session'),
+  login: (password: string) => request<{ authenticated: boolean }>('/login', post({ password })),
+  logout: () => request<{ authenticated: boolean }>('/logout', post()),
+  addSymbol: (symbol: string) => request<{ symbols: string[] }>('/watchlist', post({ symbol })),
+  removeSymbol: (symbol: string) =>
+    request<{ symbols: string[] }>(`/watchlist/${encodeURIComponent(symbol)}`, { method: 'DELETE' }),
+  scanner: () => request<ScannerResponse>('/scanner'),
+  asset: (symbol: string) => request<AssetOverview>(`/assets/${encodeURIComponent(symbol)}`),
+  expirations: (symbol: string) =>
+    request<{ expirations: string[] }>(`/assets/${encodeURIComponent(symbol)}/expirations`),
+  chain: (symbol: string, expiry: string) =>
+    request<ChainView>(`/assets/${encodeURIComponent(symbol)}/chain?expiry=${expiry}`),
+  strategies: (symbol: string, expiry: string, profile: Profile | null) =>
+    request<StrategiesView>(
+      `/assets/${encodeURIComponent(symbol)}/strategies?expiry=${expiry}${profile ? `&profile=${profile}` : ''}`,
+    ),
+};
+
+/** Carrega ao montar e quando `key` muda. Com key null, não busca nada. */
+export function useResource<T>(key: string | null, load: () => Promise<T>) {
+  const [state, setState] = useState<{ key: string | null; data: T | null; error: ApiError | null; loading: boolean }>({
+    key,
+    data: null,
+    error: null,
+    loading: key !== null,
+  });
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (key === null) {
+      setState({ key, data: null, error: null, loading: false });
+      return;
+    }
+    let active = true;
+    // Ao trocar de chave, o dado anterior sai: não pode parecer do novo ativo.
+    setState((previous) => ({ key, data: previous.key === key ? previous.data : null, error: null, loading: true }));
+    load()
+      .then((data) => active && setState({ key, data, error: null, loading: false }))
+      .catch((error: ApiError) => active && setState({ key, data: null, error, loading: false }));
+    return () => {
+      active = false;
+    };
+    // `load` muda a cada render; a identidade do pedido é `key`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, attempt]);
+
+  const reload = useCallback(() => setAttempt((value) => value + 1), []);
+  const current = state.key === key;
+  return {
+    data: current ? state.data : null,
+    error: current ? state.error : null,
+    loading: current ? state.loading : key !== null,
+    reload,
+  };
+}

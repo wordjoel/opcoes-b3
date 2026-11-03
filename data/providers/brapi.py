@@ -4,16 +4,22 @@ Regras aprendidas com as respostas reais:
 - A grade de opções é de fim de dia e o pregão do dia entra por volta das 21h.
 - `regularMarketTime` não é o horário do último negócio, então a grade nunca usa a
   cotação corrente: o preço do ativo vem de `underlyingPrice`, do mesmo pregão.
+- Bid e ask dessa grade são sobras após o fechamento, muitas vezes zeradas (em 03/11/2026,
+  só 63 de 176 séries negociadas de PETR4 tinham os dois, com spread mediano de 77%).
+  Zero significa "sem oferta". O preço que serve para análise é o fechamento.
 - Sem token, as opções só respondem para PETR4. O token vai apenas no header.
 """
 
+from calendar import FRIDAY, monthcalendar
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
+from statistics import median
 
 import httpx
 
 from core.exceptions import DataInsufficientError
 from core.types import (
+    CorporateEvent,
     ExerciseStyle,
     MarketSnapshot,
     OptionChain,
@@ -24,13 +30,37 @@ from core.types import (
     SourceKind,
 )
 from data.normalizer import normalize_symbol
-from data.providers.base import DataProvider
+from data.providers.base import AtmIvSample, DataProvider
 
 BASE_URL = "https://brapi.dev/api/v2"
 SOURCE = "brapi"
 # Fuso fixo: o Brasil não tem horário de verão desde 2019.
 _BRT = timezone(timedelta(hours=-3))
 _SESSION_CLOSE_HOUR = 18
+
+
+# Vencimento mensal mais próximo a pelo menos esta distância, para evitar o gama do fim.
+_MIN_DAYS_TO_EXPIRY = 20
+# Distância do ativo e confiança aceitas na medida da vol no dinheiro.
+_ATM_BAND = 0.05
+_TRUSTED_CONFIDENCE = {"high", "medium"}
+_MIN_ATM_VALUES = 2
+_EVENTS_HORIZON_DAYS = 180
+
+
+class _NotFound(DataInsufficientError):
+    """A fonte respondeu 404: não há esse dado, o que é diferente de falta de acesso."""
+
+
+def candidate_expiries(day: date) -> list[date]:
+    """Terceira sexta do primeiro mês possível e a véspera, usada quando a sexta é feriado."""
+    year, month = day.year, day.month
+    while True:
+        fridays = [week[FRIDAY] for week in monthcalendar(year, month) if week[FRIDAY]]
+        third = date(year, month, fridays[2])
+        if (third - day).days >= _MIN_DAYS_TO_EXPIRY:
+            return [third, third - timedelta(days=1)]
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
 
 def _session_close(day: date) -> datetime:
@@ -67,7 +97,7 @@ class BrapiProvider(DataProvider):
         if response.status_code == 429:
             raise DataInsufficientError("limite de requisições da brapi atingido")
         if response.status_code == 404:
-            raise DataInsufficientError(f"brapi não encontrou {params}")
+            raise _NotFound(f"brapi não encontrou {params}")
         if response.status_code != 200:
             raise DataInsufficientError(f"brapi respondeu {response.status_code}")
         return response.json()
@@ -141,12 +171,77 @@ class BrapiProvider(DataProvider):
             ask=item.get("ask"),
             open_interest=item.get("openInterest"),
             volume=item.get("volume"),
+            trades=item.get("trades"),
+            open_interest_change=item.get("openInterestChange"),
             close=item.get("close"),
             last_trade_date=date.fromisoformat(last_trade) if last_trade else None,
             iv=greeks.get("impliedVolatility"),
             delta=greeks.get("delta"),
             provenance=provenance,
         )
+
+    def get_upcoming_events(self, symbol: str, today: date) -> list[CorporateEvent]:
+        symbol = normalize_symbol(symbol)
+        events: list[CorporateEvent] = []
+        limit = today + timedelta(days=_EVENTS_HORIZON_DAYS)
+        try:
+            earnings = self._get(
+                "/stocks/earnings-calendar", {"symbols": symbol, "from": today.isoformat(), "to": limit.isoformat()}
+            )
+        except _NotFound:
+            earnings = {}
+        for item in earnings.get("results") or []:
+            if item.get("status") == "scheduled" and item.get("date"):
+                events.append(
+                    CorporateEvent(
+                        kind="RESULTADO",
+                        day=date.fromisoformat(item["date"][:10]),
+                        label=f"Resultado {item.get('fiscalPeriod')}/{item.get('fiscalYear')}",
+                        confirmed=item.get("dateStatus") == "confirmed",
+                    )
+                )
+        try:
+            dividends = self._get("/stocks/dividends", {"symbols": symbol})
+        except _NotFound:
+            dividends = {}
+        results = dividends.get("results") or []
+        data = (results[0].get("data") or {}) if results else {}
+        groups = (("PROVENTO", data.get("cashDividends")), ("EVENTO_SOCIETARIO", data.get("stockDividends")))
+        for kind, items in groups:
+            for item in items or []:
+                moment = item.get("exDate") or item.get("lastDatePrior")
+                if moment:
+                    day = datetime.fromisoformat(moment.replace("Z", "+00:00")).astimezone(_BRT).date()
+                    if today <= day <= limit:
+                        confirmed = item.get("verified", True) is not False
+                        events.append(CorporateEvent(kind=kind, day=day, label=item.get("label") or kind, confirmed=confirmed))
+        return sorted(events, key=lambda event: event.day)
+
+    def get_atm_iv_on(self, underlying: str, day: date) -> AtmIvSample | None:
+        """Mediana das vols perto do ativo. Em datas passadas, lastTradeDate é o último negócio
+        geral da série, não o daquele dia: por isso o filtro é pela confiança da própria fonte."""
+        symbol = normalize_symbol(underlying)
+        for expiry in candidate_expiries(day):
+            try:
+                payload = self._get(
+                    "/options/analytics",
+                    {"underlying": symbol, "expirationDate": expiry.isoformat(), "date": day.isoformat()},
+                )
+            except _NotFound:
+                continue
+            # Em feriado, a fonte devolve o pregão anterior sem avisar.
+            if payload.get("date") != day.isoformat():
+                return None
+            values = [
+                row["impliedVolatility"]
+                for row in payload.get("analytics") or []
+                if row.get("impliedVolatility")
+                and row.get("confidence") in _TRUSTED_CONFIDENCE
+                and row.get("underlyingPrice")
+                and abs(row["strike"] / row["underlyingPrice"] - 1) <= _ATM_BAND
+            ]
+            return AtmIvSample(day, median(values), expiry) if len(values) >= _MIN_ATM_VALUES else None
+        return None
 
     def get_historical_prices(self, symbol: str, lookback: str = "1y") -> list[PriceBar]:
         symbol = normalize_symbol(symbol)

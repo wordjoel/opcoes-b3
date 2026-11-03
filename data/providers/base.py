@@ -6,9 +6,19 @@ DataInsufficientError em vez de preencher um valor.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import date
 
-from core.types import MarketSnapshot, OptionChain, PriceBar
+from core.types import CorporateEvent, MarketSnapshot, OptionChain, PriceBar
+
+
+@dataclass(frozen=True)
+class AtmIvSample:
+    """Vol implícita no dinheiro em um pregão, com o vencimento usado na medida."""
+
+    day: date
+    iv: float
+    expiry: date
 
 
 class DataProvider(ABC):
@@ -23,3 +33,11 @@ class DataProvider(ABC):
 
     @abstractmethod
     def get_historical_prices(self, symbol: str, lookback: str = "1y") -> list[PriceBar]: ...
+
+    @abstractmethod
+    def get_atm_iv_on(self, underlying: str, day: date) -> AtmIvSample | None:
+        """None = a fonte não tem dado suficiente nesse pregão. Erro de acesso levanta exceção."""
+
+    @abstractmethod
+    def get_upcoming_events(self, symbol: str, today: date) -> list[CorporateEvent]:
+        """Resultados, proventos e eventos societários a partir de hoje, em ordem de data."""

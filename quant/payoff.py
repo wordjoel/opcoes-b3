@@ -111,3 +111,13 @@ def probability_of_profit(
         if float(position_pnl(legs, sample)) > _EPSILON:
             probability += (1.0 if high is None else cdf(high)) - cdf(low)
     return probability
+
+
+def payoff_curve(legs: Sequence[OptionLeg], spot: float, span: float = 0.3, points: int = 61) -> list[tuple[float, float]]:
+    """Pontos (preço no vencimento, P&L) em torno do ativo, sempre incluindo os strikes."""
+    if spot <= 0 or not 0 < span < 1 or points < 2:
+        raise ValueError("Parâmetros de curva inválidos")
+    grid = {float(price) for price in np.linspace(spot * (1 - span), spot * (1 + span), points)}
+    grid |= {leg.strike for leg in legs}
+    prices = sorted(grid)
+    return [(price, float(pnl)) for price, pnl in zip(prices, position_pnl(legs, np.array(prices)))]

@@ -4,7 +4,7 @@
  * Por isso só atende GET da própria origem, fora de /api/.
  * Aumente a versão para descartar o cache antigo.
  */
-const CACHE = 'b3-shell-v1';
+const CACHE = 'b3-shell-v2';
 const STATIC_FILES = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {

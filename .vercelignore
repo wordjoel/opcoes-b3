@@ -1,12 +1,11 @@
-# Só o frontend é publicado: o motor Python, os testes e a auditoria ficam fora.
+# Fica fora do deploy. A API usa app, core, data, db e quant.
 .venv
-core
-data
-quant
+agents
 tests
 docs
+scripts
 pyproject.toml
 firebase-blueprint.json
+.b3-local.db*
 .env*
 !.env.example
-agents

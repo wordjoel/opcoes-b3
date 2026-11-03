@@ -11,6 +11,7 @@ from enum import Enum
 
 from core.config import DataQualityLimits
 from core.exceptions import DataInsufficientError
+from core.text import decimal_comma
 from core.types import MarketSnapshot, OptionChain, OptionKind, OptionQuote, PriceBar, Provenance, SourceKind
 
 
@@ -81,17 +82,25 @@ def _quote_problem(quote: OptionQuote, spot: float, now: datetime, market_date: 
     label = quote.symbol
     if market_date is not None and quote.last_trade_date != market_date:
         return _warning("NOT_TRADED", f"{label}: sem negócio no pregão de {market_date}")
-    if quote.bid is None or quote.ask is None or quote.bid == 0 or quote.ask == 0:
-        return _warning("MISSING_QUOTE", f"{label}: sem bid e ask")
-    if quote.bid > quote.ask:
-        return _warning("CROSSED_QUOTE", f"{label}: bid {quote.bid} acima do ask {quote.ask}")
+    # Em grade de fim de dia, bid e ask são sobras de ofertas após o fechamento, sem valor
+    # de preço: a PETRL497 negociou 607.600 opções em 30/10 e fechou com 0,25 x 18,50.
+    if market_date is not None:
+        if not quote.close:
+            return _warning("MISSING_QUOTE", f"{label}: sem preço de fechamento")
+        price = quote.close
+    else:
+        if not quote.bid or not quote.ask:
+            return _warning("MISSING_QUOTE", f"{label}: sem bid e ask")
+        if quote.bid > quote.ask:
+            return _warning("CROSSED_QUOTE", f"{label}: bid {quote.bid} acima do ask {quote.ask}")
+        price = quote.bid
     if quote.expiry < now.date():
         return _warning("EXPIRED_OPTION", f"{label}: venceu em {quote.expiry}")
     # O prêmio de uma call nunca excede o ativo, nem o de uma put europeia, o strike.
-    if quote.kind is OptionKind.CALL and quote.bid > spot:
-        return _warning("PRICE_OUTLIER", f"{label}: bid acima do preço do ativo")
-    if quote.kind is OptionKind.PUT and quote.bid > quote.strike:
-        return _warning("PRICE_OUTLIER", f"{label}: bid acima do strike")
+    if quote.kind is OptionKind.CALL and price > spot:
+        return _warning("PRICE_OUTLIER", f"{label}: preço acima do ativo")
+    if quote.kind is OptionKind.PUT and price > quote.strike:
+        return _warning("PRICE_OUTLIER", f"{label}: preço acima do strike")
     return None
 
 
@@ -123,6 +132,8 @@ def validate_chain(
         elif not quote_issues:
             usable.append(quote)
 
+    if usable and chain.market_date is not None:
+        issues.append(_warning("CLOSE_ONLY", f"{len(usable)} opções com preço indicativo pelo fechamento"))
     if not usable:
         issues.append(_error("NO_USABLE_QUOTES", f"{spot.symbol}: nenhuma opção utilizável"))
     return ValidationReport(tuple(issues), tuple(usable))
@@ -146,6 +157,17 @@ def validate_bars(bars: list[PriceBar], limits: DataQualityLimits = DataQualityL
             issues.append(_error("UNORDERED_SERIES", f"{current.day}: data fora de ordem ou repetida"))
         elif gap > limits.max_bar_gap_days:
             issues.append(_warning("SERIES_GAP", f"{gap} dias sem dados até {current.day}"))
+        move = current.close / previous.close - 1
+        if abs(move) > limits.max_daily_move:
+            issues.append(
+                _warning(
+                    "LARGE_JUMP",
+                    f"{current.day.strftime('%d/%m/%Y')}: fechamento de "
+                    + decimal_comma(f"{previous.close:.2f} para {current.close:.2f}")
+                    + f" ({move:+.0%}) em um pregão. Confira se é fato de mercado ou erro da fonte; "
+                    "a volatilidade histórica inclui esse salto.",
+                )
+            )
     return ValidationReport(tuple(issues))
 
 

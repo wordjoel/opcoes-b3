@@ -1,20 +1,40 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# B3 Opções Pro
 
-# Run and deploy your AI Studio app
+Análise de opções da B3 para uso pessoal. Só análise: não existe envio de ordens.
 
-This contains everything you need to run your app locally.
+- `src/`: PWA em React
+- `api/index.py` e `app/`: API em FastAPI, com login
+- `core/`, `data/`, `quant/`: contratos, fonte de dados e motor quantitativo
+- `db/`: cliente Turso/SQLite e migrations
 
-View your app in AI Studio: https://ai.studio/apps/c7a42178-a9df-417f-a22d-1b33141d05df
+Convenções e limitações: `docs/quant-convencoes.md`.
 
-## Run Locally
+## Rodar localmente
 
-**Prerequisites:**  Node.js
+Na primeira vez, gere a senha e copie as duas linhas para `.env.turso` (modelo em `.env.example`), junto com `B3_INSECURE_COOKIE=1`:
 
+```
+.venv/Scripts/python -m scripts.hash_password
+.venv/Scripts/python -m db.migrate
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Em dois terminais:
+
+```
+.venv/Scripts/python -m uvicorn app.main:app --port 8000
+npm run dev
+```
+
+Abra http://127.0.0.1:3000. Sem `BRAPI_API_KEY`, só a PETR4 tem grade de opções.
+
+## Testes
+
+```
+.venv/Scripts/python -m pytest
+npm run lint
+npm run build
+```
+
+## Publicar
+
+Cadastre as variáveis de `.env.example` no projeto da Vercel, exceto `B3_INSECURE_COOKIE`, e rode `db.migrate` apontando para o Turso antes do deploy.

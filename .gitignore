@@ -13,6 +13,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Banco local de desenvolvimento
+.b3-local.db*
+
 .vercel
 .env*
 !.env.example

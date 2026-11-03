@@ -87,6 +87,10 @@ class OptionQuote(StrictModel):
     ask: NonNegative | None = None
     open_interest: Count | None = None
     volume: Count | None = None
+    # Negócios no pregão: um fechamento de um único negócio informa pouco.
+    trades: Count | None = None
+    # Variação de contratos em aberto no pregão; pode ser negativa.
+    open_interest_change: int | None = None
     close: NonNegative | None = None
     last_trade_date: date | None = None
     iv: NonNegative | None = None
@@ -102,6 +106,16 @@ class OptionChain(StrictModel):
     risk_free_rate: float | None = None
     # Anos até o vencimento, na convenção da fonte.
     time_to_expiry_years: Positive | None = None
+
+
+class CorporateEvent(StrictModel):
+    """Evento previsto do ativo, como informado pela fonte."""
+
+    kind: Literal["RESULTADO", "PROVENTO", "EVENTO_SOCIETARIO"]
+    day: date
+    label: str
+    # False = data estimada ou não verificada pela fonte.
+    confirmed: bool
 
 
 class PriceBar(StrictModel):

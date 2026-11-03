@@ -44,6 +44,27 @@ def historical_volatility(closes: Sequence[float], min_observations: int = 20) -
     return float(np.std(returns, ddof=1) * np.sqrt(BUSINESS_DAYS_PER_YEAR))
 
 
+def rolling_volatility(closes: Sequence[float], window: int = 20) -> list[float | None]:
+    """Vol histórica em janela móvel, alinhada aos fechamentos. None até haver `window` retornos."""
+    series: list[float | None] = [None] * min(window, len(closes))
+    for end in range(window + 1, len(closes) + 1):
+        series.append(historical_volatility(closes[end - window - 1 : end], min_observations=window))
+    return series
+
+
+def bollinger_bands(
+    closes: Sequence[float], window: int = 20, width: float = 2.0
+) -> list[tuple[float, float, float] | None]:
+    """(superior, média, inferior) com desvio-padrão populacional, alinhada aos fechamentos."""
+    prices = np.asarray(closes, dtype=float)
+    bands: list[tuple[float, float, float] | None] = [None] * min(window - 1, len(closes))
+    for end in range(window, len(closes) + 1):
+        slice_ = prices[end - window : end]
+        middle, deviation = float(slice_.mean()), float(slice_.std())
+        bands.append((middle + width * deviation, middle, middle - width * deviation))
+    return bands
+
+
 def ewma_volatility(closes: Sequence[float], decay: float = 0.94, min_observations: int = 20) -> float:
     """Média exponencial da variância (RiskMetrics), iniciada no primeiro retorno ao quadrado."""
     if not 0 < decay < 1:

@@ -1,12 +1,13 @@
 """Gregas de Black-Scholes-Merton."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import exp, pi, sqrt
 
 from scipy.special import ndtr
 
 from core.config import BUSINESS_DAYS_PER_YEAR
-from core.types import OptionKind
+from core.types import LegAction, OptionKind, OptionLeg
 from quant.pricing.black_scholes import check_inputs, d1_d2
 
 
@@ -34,6 +35,16 @@ class Greeks:
         return self.rho / 100
 
 
+@dataclass(frozen=True)
+class PositionGreeks:
+    """Da posição inteira, em R$: delta por R$ 1,00 no ativo, theta por dia útil, vega por ponto."""
+
+    delta: float
+    gamma: float
+    theta_per_business_day: float
+    vega_per_vol_point: float
+
+
 def option_greeks(kind: OptionKind, s: float, k: float, t: float, r: float, sigma: float, q: float = 0.0) -> Greeks:
     check_inputs(s, k, sigma)
     sign = 1 if kind is OptionKind.CALL else -1
@@ -58,3 +69,22 @@ def option_greeks(kind: OptionKind, s: float, k: float, t: float, r: float, sigm
         vega=s * eq * pdf * root,
         rho=sign * k * t * er * float(ndtr(sign * d2)),
     )
+
+
+def position_greeks(
+    legs: Sequence[OptionLeg], ivs: Sequence[float | None], s: float, t: float, r: float, q: float = 0.0
+) -> PositionGreeks | None:
+    """Soma das pernas com sinal e quantidade. None se faltar a volatilidade de alguma perna."""
+    if len(legs) != len(ivs):
+        raise ValueError("Uma volatilidade por perna")
+    delta = gamma = theta = vega = 0.0
+    for leg, iv in zip(legs, ivs):
+        if iv is None or iv <= 0:
+            return None
+        size = leg.quantity * (1 if leg.action is LegAction.BUY else -1)
+        greeks = option_greeks(leg.kind, s, leg.strike, t, r, iv, q)
+        delta += size * greeks.delta
+        gamma += size * greeks.gamma
+        theta += size * greeks.theta_per_business_day
+        vega += size * greeks.vega_per_vol_point
+    return PositionGreeks(delta, gamma, theta, vega)
