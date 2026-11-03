@@ -1,8 +1,8 @@
 import { FormEvent, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, useResource } from '../services/api';
-import { LabOpportunity, LabRankingRow, LabStrategy } from '../types';
-import { formatCurrency, formatDay, formatLimit, formatNumber, formatRatio } from '../lib/utils';
+import { LabOpportunity, LabRankingRow, LabStrategy, Regime } from '../types';
+import { formatCurrency, formatDay, formatLimit, formatNumber, formatRatio, REGIME_LABEL } from '../lib/utils';
 import { ErrorNotice, Loading, Panel, Signed } from './Common';
 
 const INK = '#191916';
@@ -551,10 +551,10 @@ function StrategyDetail({ id, onBack }: { id: string; onBack: () => void }) {
             <FactRow name="Capital empregado" value={formatCurrency(item.employed_brl)} other="Risco máximo" otherValue={formatCurrency(item.max_risk_brl)} />
             <FactRow name="Resultado" value={formatCurrency(item.pnl_brl)} other="Sobre o risco" otherValue={formatRatio(item.return_on_risk)} />
             <FactRow name="Sobre o capital empregado" value={formatRatio(item.return_on_employed)} other="Drawdown" otherValue={formatCurrency(item.max_drawdown_brl)} />
-            <FactRow name="Maior ganho" value={formatCurrency(item.best_brl)} other="Maior perda" otherValue={formatCurrency(item.worst_brl)} />
+            <FactRow name="Melhor marcação" value={formatCurrency(item.best_brl)} other="Pior marcação" otherValue={formatCurrency(item.worst_brl)} />
             <FactRow name="Custos" value={item.cost_informed ? formatCurrency(item.cost_brl) : 'Não informados: resultado sem custos'} other="Dias até o alvo" otherValue={item.days_to_target === null ? '—' : String(item.days_to_target)} />
             <FactRow name="Alvo" value={item.target_pct === null ? 'Sem alvo' : `${formatNumber(item.target_pct)}% do risco`} other="Stop" otherValue={item.stop_pct === null ? 'Sem stop' : `${formatNumber(item.stop_pct)}% do risco`} />
-            <FactRow name="Situação" value={item.status === 'ATIVA' ? 'Ativa' : REASON[item.close_reason ?? ''] ?? 'Encerrada'} other="Regime na entrada" otherValue={item.regime ?? '—'} />
+            <FactRow name="Situação" value={item.status === 'ATIVA' ? 'Ativa' : REASON[item.close_reason ?? ''] ?? 'Encerrada'} other="Regime na entrada" otherValue={item.regime ? REGIME_LABEL[item.regime as Regime] ?? item.regime : "—"} />
           </tbody>
         </table>
       </div>
