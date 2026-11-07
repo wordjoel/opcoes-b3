@@ -55,8 +55,12 @@ def provider(routes):
 class TestBrapiHistory:
     DAY = date(2026, 10, 14)
 
+    def test_holiday_friday_moves_expiry_to_thursday(self):
+        # 20/11/2026 é sexta e feriado nacional: o vencimento é a quinta, 19/11.
+        assert candidate_expiries(self.DAY) == [date(2026, 11, 19), date(2026, 11, 20)]
+
     def test_candidates_are_third_friday_then_thursday(self):
-        assert candidate_expiries(self.DAY) == [date(2026, 11, 20), date(2026, 11, 19)]
+        assert candidate_expiries(date(2026, 9, 1)) == [date(2026, 10, 16), date(2026, 10, 15)]
 
     def test_candidates_respect_minimum_distance(self):
         assert candidate_expiries(date(2026, 11, 1))[0] == date(2026, 12, 18)

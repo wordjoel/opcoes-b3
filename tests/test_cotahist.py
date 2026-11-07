@@ -326,11 +326,11 @@ def test_quote_uses_its_own_source_order():
 @pytest.mark.parametrize(
     ("moment", "expected"),
     [
-        # Grade de sexta, 30/10: vale no fim de semana e até a abertura de segunda.
+        # Grade de sexta, 30/10: segunda, 02/11, é Finados; vale até a abertura de terça.
         (datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc), True),
-        (datetime(2026, 11, 2, 12, 59, tzinfo=timezone.utc), True),
-        (datetime(2026, 11, 2, 13, 0, tzinfo=timezone.utc), False),
-        (datetime(2026, 11, 3, 23, 0, tzinfo=timezone.utc), False),
+        (datetime(2026, 11, 2, 13, 0, tzinfo=timezone.utc), True),
+        (datetime(2026, 11, 3, 12, 59, tzinfo=timezone.utc), True),
+        (datetime(2026, 11, 3, 13, 0, tzinfo=timezone.utc), False),
     ],
 )
 def test_grid_is_current_only_until_next_opening(moment, expected):

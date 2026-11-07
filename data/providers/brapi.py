@@ -10,7 +10,6 @@ Regras aprendidas com as respostas reais:
 - Sem token, as opções só respondem para PETR4. O token vai apenas no header.
 """
 
-from calendar import FRIDAY, monthcalendar
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
@@ -19,6 +18,7 @@ from statistics import median
 
 import httpx
 
+from core.calendario_b3 import monthly_option_expiry, previous_trading_day
 from core.exceptions import DataInsufficientError
 from core.types import (
     CorporateEvent,
@@ -75,13 +75,16 @@ class _NotFound(DataInsufficientError):
 
 
 def candidate_expiries(day: date) -> list[date]:
-    """Terceira sexta do primeiro mês possível e a véspera, usada quando a sexta é feriado."""
+    """Vencimento mensal do primeiro mês possível pelo calendário da B3 e, como reserva caso
+    o calendário erre, a outra data plausível: a terceira sexta ou o pregão anterior a ela."""
     year, month = day.year, day.month
     while True:
-        fridays = [week[FRIDAY] for week in monthcalendar(year, month) if week[FRIDAY]]
-        third = date(year, month, fridays[2])
-        if (third - day).days >= _MIN_DAYS_TO_EXPIRY:
-            return [third, third - timedelta(days=1)]
+        expiry = monthly_option_expiry(year, month)
+        if (expiry - day).days >= _MIN_DAYS_TO_EXPIRY:
+            first = date(year, month, 1)
+            third_friday = first + timedelta(days=(4 - first.weekday()) % 7 + 14)
+            fallback = previous_trading_day(expiry) if expiry == third_friday else third_friday
+            return [expiry, fallback]
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
 

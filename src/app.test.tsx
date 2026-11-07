@@ -24,7 +24,7 @@ const candidate = (key: string, name: string, dec: object) => ({
 });
 const strategies = {
   symbol: 'PETR4', expiry: '2026-12-18', market_date: '2026-10-30', spot: 50, live_price: 50, spot_drift: 0, risk_free_rate: 0.1375,
-  time_to_expiry_years: 0.1, atm_iv: 0.3, historical_volatility: 0.3, iv_ratio: 1, regime: 'SIDEWAYS', profile: null, capital_configured: false,
+  time_to_expiry_years: 0.1, business_days_to_expiry: 25, atm_iv: 0.3, historical_volatility: 0.3, iv_ratio: 1, regime: 'SIDEWAYS', profile: null, capital_configured: false,
   iv_rank: null, iv_percentile: null, iv_samples: 6, iv_samples_needed: 26, structure: null, events: [], events_error: 'limite atingido',
   quality: { is_valid: true, issues: [] },
   candidates: [

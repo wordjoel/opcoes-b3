@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
+from core.calendario_b3 import trading_days_between
 from core.clock import MARKET_TZ, market_today
 from core.config import DataQualityLimits
 from core.exceptions import DataInsufficientError
@@ -346,6 +347,7 @@ def strategies_view(
         "spot_drift": drift,
         "risk_free_rate": r,
         "time_to_expiry_years": t,
+        "business_days_to_expiry": trading_days_between(chain.market_date or market_today(now), expiry),
         "atm_iv": atm_iv,
         "historical_volatility": hv,
         "iv_ratio": iv_ratio,

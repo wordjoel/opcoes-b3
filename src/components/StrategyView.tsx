@@ -198,7 +198,8 @@ function Analysis({ view }: { view: StrategiesView }) {
     <div className="space-y-4">
       <p role="status" className="border-y border-ink py-2 text-base">
         Prêmios do <strong>fechamento de {formatDay(view.market_date)}</strong>, com o ativo a {formatCurrency(view.spot)}: são
-        indicativos e não garantem execução. A grade do pregão do dia entra por volta das 21h. Fonte: {view.source ?? 'não informada'}.
+        indicativos e não garantem execução. Faltam {view.business_days_to_expiry} pregões até o vencimento, pelo calendário da B3. A grade
+        do pregão do dia entra por volta das 21h. Fonte: {view.source ?? 'não informada'}.
       </p>
       {drifted && (
         <p role="alert" className="border-y border-accent py-2 text-base">

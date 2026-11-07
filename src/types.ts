@@ -198,6 +198,7 @@ export interface StrategiesView {
   spot_drift: number | null;
   risk_free_rate: number;
   time_to_expiry_years: number;
+  business_days_to_expiry: number;
   atm_iv: number | null;
   historical_volatility: number | null;
   iv_ratio: number | null;

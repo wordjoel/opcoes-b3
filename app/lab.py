@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from app.service import _try_bars, _regime, spot_drift
+from core.calendario_b3 import add_trading_days
 from core.clock import grid_still_current, market_today
 from core.exceptions import DataInsufficientError
 from core.types import LegAction, OptionChain, OptionKind, OptionLeg
@@ -378,12 +379,8 @@ def monitor(provider: DataProvider, db: Database, now: datetime, budget_seconds:
 
 
 def _weekdays_after(start: date, count: int) -> date:
-    day = start
-    while count > 0:
-        day += timedelta(days=1)
-        if day.weekday() < 5:
-            count -= 1
-    return day
+    """O `count`-ésimo pregão depois de `start`, pelo calendário da B3."""
+    return add_trading_days(start, count)
 
 
 def _session_now(day: date) -> datetime:

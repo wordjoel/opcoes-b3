@@ -10,6 +10,7 @@ from datetime import date
 from math import log1p
 from statistics import mean
 
+from core.calendario_b3 import trading_days_between
 from core.text import decimal_comma
 from core.types import CorporateEvent, ExerciseStyle, LegAction, OptionLeg, OptionQuote, RiskAssessment, StrategyProposal
 from quant.payoff import net_premium, position_pnl, probability_of_profit
@@ -35,8 +36,8 @@ class RiskLimits:
     min_trades: int = 3
     # Movimento do ativo desde o pregão da grade que invalida os prêmios.
     max_spot_drift: float = 0.03
-    # Cerca de 5 dias úteis.
-    near_expiry_years: float = 5 / 252
+    # Pregões até o vencimento abaixo dos quais o risco de gama recebe aviso.
+    near_expiry_sessions: int = 5
     low_pop: float = 0.25
     # Venda de crédito abaixo disto recebe aviso.
     min_credit_pop: float = 0.65
@@ -230,8 +231,14 @@ def assess_risk(
     thin = sorted(quote.symbol for quote in quotes if quote.trades is not None and quote.trades < limits.min_trades)
     if thin:
         warnings.append(f"Fechamento formado por poucos negócios: {', '.join(thin)}.")
-    if t < limits.near_expiry_years:
-        warnings.append("Menos de 5 dias úteis até o vencimento: o risco de gama é alto.")
+    expiries = {leg.expiry for leg in legs}
+    if today is not None and len(expiries) == 1:
+        sessions_left = trading_days_between(today, expiries.pop())
+    else:
+        # Sem data de referência, estima pelos dias corridos do prazo da grade.
+        sessions_left = int(t * 365 * 5 / 7)
+    if sessions_left < limits.near_expiry_sessions:
+        warnings.append(f"Menos de {limits.near_expiry_sessions} pregões até o vencimento: o risco de gama é alto.")
     american_short = [
         quote.symbol
         for leg, quote in zip(legs, quotes)
