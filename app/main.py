@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app import auth, lab, service
+from app import auth, carteira, lab, service
 from app.cache import CachingProvider
 from core.clock import market_today
 from core.config import load_local_env
@@ -74,6 +74,21 @@ class CostSettingsRequest(BaseModel):
     per_order_brl: float = Field(ge=0, le=10_000)
     fee_pct: float = Field(ge=0, le=5)
     income_tax_pct: float = Field(ge=0, le=100)
+
+
+class PortfolioSettingsRequest(BaseModel):
+    initial_cash_brl: float = Field(ge=0, le=1_000_000_000)
+    max_position_size: int = Field(gt=0, le=10_000_000)
+
+
+class FillRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=16)
+    side: Literal["BUY", "SELL"]
+    quantity: int = Field(gt=0, le=10_000_000)
+    price: float = Field(ge=0, le=1_000_000)
+    fees_brl: float = Field(default=0, ge=0, le=1_000_000)
+    trade_day: date
+    note: str | None = Field(default=None, max_length=200)
 
 
 class LabStartRequest(BaseModel):
@@ -404,7 +419,43 @@ def create_app(
     ) -> dict:
         capital, _ = read_capital(db)
         costs, _ = read_costs(db)
-        return service.strategies_view(source, _valid_symbol(symbol), expiry, now(), profile=profile, capital=capital, costs=costs)
+        moment = now()
+        view = service.strategies_view(source, _valid_symbol(symbol), expiry, moment, profile=profile, capital=capital, costs=costs)
+        carteira.apply_review(view, carteira.review_candidates(db, view))
+        carteira.record_decisions(db, view, moment)
+        return view
+
+    @router.get("/portfolio", dependencies=protected)
+    def get_portfolio(db: Database = Depends(database)) -> dict:
+        return carteira.portfolio_view(db)
+
+    @router.put("/portfolio/settings", dependencies=protected)
+    def put_portfolio_settings(body: PortfolioSettingsRequest, db: Database = Depends(database)) -> dict:
+        carteira.save_settings(db, body.initial_cash_brl, body.max_position_size, now())
+        return carteira.portfolio_view(db)
+
+    @router.post("/portfolio/fills", dependencies=protected)
+    def post_fill(body: FillRequest, db: Database = Depends(database)) -> dict:
+        if body.trade_day > market_today(now()):
+            raise HTTPException(422, "Data da operação no futuro")
+        symbol = body.symbol.strip().upper()
+        if not symbol.isalnum():
+            raise HTTPException(422, "Código inválido")
+        try:
+            carteira.add_fill(db, symbol, body.side, body.quantity, body.price, body.fees_brl, body.trade_day, body.note, now())
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        return carteira.portfolio_view(db)
+
+    @router.post("/portfolio/fills/{identity}/void", dependencies=protected)
+    def void_fill(identity: int, db: Database = Depends(database)) -> dict:
+        if carteira.void_fill(db, identity, now()) is None:
+            raise HTTPException(404, "Operação não encontrada")
+        return carteira.portfolio_view(db)
+
+    @router.get("/decisions", dependencies=protected)
+    def get_decisions(symbol: str | None = None, limit: int = Query(default=100, ge=1, le=500), db: Database = Depends(database)) -> dict:
+        return {"decisions": carteira.list_decisions(db, _valid_symbol(symbol) if symbol else None, limit)}
 
     app.include_router(router)
     return app

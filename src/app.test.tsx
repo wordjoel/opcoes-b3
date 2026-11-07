@@ -220,3 +220,36 @@ describe('alertas e saída', () => {
     await waitFor(() => expect(calls.some((call) => call.method === 'POST' && call.path === '/api/logout')).toBe(true));
   });
 });
+
+describe('carteira', () => {
+  const empty = { settings: { initial_cash_brl: 1000, max_position_size: 500, updated_at: '2026-11-03T15:00:00+00:00' }, cash_brl: 1000, realized_pnl_brl: 0, fees_brl: 0, realized_net_brl: 0, positions: [], fills: [] };
+  const fill = { id: 1, symbol: 'PETRL500', side: 'BUY', quantity: 100, price: 1.5, fees_brl: 2, trade_day: '2026-11-03', note: null, created_at: '2026-11-03T15:00:00+00:00', voided_at: null };
+
+  it('registra uma operação e mostra a posição', async () => {
+    routes['GET /api/portfolio'] = { body: empty };
+    routes['POST /api/portfolio/fills'] = { body: { ...empty, cash_brl: 848, fees_brl: 2, realized_net_brl: -2, positions: [{ symbol: 'PETRL500', quantity: 100, avg_entry_price: 1.5 }], fills: [fill] } };
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Carteira' }));
+    expect(await screen.findByText('Nenhuma posição aberta.')).toBeTruthy();
+    await userEvent.type(screen.getByLabelText('Série'), 'petrl500');
+    await userEvent.type(screen.getByLabelText('Quantidade'), '100');
+    await userEvent.type(screen.getByLabelText('Preço (R$)'), '1.5');
+    await userEvent.type(screen.getByLabelText('Custos (R$)'), '2');
+    await userEvent.click(screen.getByRole('button', { name: 'Registrar' }));
+    expect(await screen.findByRole('button', { name: 'Anular operação 1' })).toBeTruthy();
+    const post = calls.find((call) => call.method === 'POST' && call.path === '/api/portfolio/fills')!;
+    expect(JSON.parse(post.body!)).toMatchObject({ symbol: 'PETRL500', side: 'BUY', quantity: 100, price: 1.5, fees_brl: 2 });
+    expect(screen.queryByText('Nenhuma posição aberta.')).toBeNull();
+  });
+
+  it('mostra o registro de decisões com os dados', async () => {
+    routes['GET /api/portfolio'] = { body: empty };
+    routes['GET /api/decisions'] = { body: { decisions: [{ id: 'abc', created_at: '2026-11-03T15:00:00+00:00', symbol: 'PETR4', expiry: '2026-12-18', structure_key: 'long_call', status: 'INCOMPLETA', reasons: [], missing: ['custos operacionais não informados'], inputs: { spot: 50 } }] } };
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Carteira' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Registro de decisões' }));
+    expect(await screen.findByText('custos operacionais não informados')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Ver' }));
+    expect(screen.getByText(/"spot": 50/)).toBeTruthy();
+  });
+});

@@ -4,6 +4,7 @@ const MENU = [
   { id: 'strategy', label: 'Estratégias' },
   { id: 'alerts', label: 'Alertas' },
   { id: 'lab', label: 'Laboratório' },
+  { id: 'carteira', label: 'Carteira' },
 ];
 
 interface MastheadProps {

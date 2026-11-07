@@ -188,6 +188,42 @@ export interface Candidate {
     costs_brl?: number | null;
     max_profit_net?: number | null;
   };
+  portfolio?: { decision: 'APPROVED' | 'REJECTED'; reasons: string[] } | null;
+}
+
+export interface PortfolioFill {
+  id: number;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  price: number;
+  fees_brl: number;
+  trade_day: string;
+  note: string | null;
+  created_at: string;
+  voided_at: string | null;
+}
+
+export interface PortfolioView {
+  settings: { initial_cash_brl: number; max_position_size: number; updated_at: string } | null;
+  cash_brl: number;
+  realized_pnl_brl: number;
+  fees_brl: number;
+  realized_net_brl: number;
+  positions: { symbol: string; quantity: number; avg_entry_price: number }[];
+  fills: PortfolioFill[];
+}
+
+export interface DecisionEntry {
+  id: string;
+  created_at: string;
+  symbol: string;
+  expiry: string;
+  structure_key: string;
+  status: string;
+  reasons: string[];
+  missing: string[];
+  inputs: Record<string, unknown>;
 }
 
 export interface StrategiesView {
@@ -208,6 +244,7 @@ export interface StrategiesView {
   profile: Profile | null;
   capital_configured: boolean;
   costs_configured?: boolean;
+  portfolio_configured?: boolean;
   iv_rank: number | null;
   iv_percentile: number | null;
   iv_samples: number;

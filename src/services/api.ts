@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AssetOverview, ChainView, LabAsset, LabOpportunity, LabRankingRow, LabStrategy, Profile, ScannerResponse, StrategiesView } from '../types';
+import { AssetOverview, ChainView, DecisionEntry, LabAsset, LabOpportunity, LabRankingRow, LabStrategy, PortfolioView, Profile, ScannerResponse, StrategiesView } from '../types';
 
 export class ApiError extends Error {
   constructor(
@@ -61,6 +61,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ per_order_brl, fee_pct, income_tax_pct }),
     }),
+  portfolio: () => request<PortfolioView>('/portfolio'),
+  savePortfolioSettings: (initial_cash_brl: number, max_position_size: number) =>
+    request<PortfolioView>('/portfolio/settings', { method: 'PUT', body: JSON.stringify({ initial_cash_brl, max_position_size }) }),
+  addFill: (body: { symbol: string; side: 'BUY' | 'SELL'; quantity: number; price: number; fees_brl: number; trade_day: string }) =>
+    request<PortfolioView>('/portfolio/fills', post(body)),
+  voidFill: (id: number) => request<PortfolioView>(`/portfolio/fills/${id}/void`, post()),
+  decisions: () => request<{ decisions: DecisionEntry[] }>('/decisions'),
   labOpportunities: () => request<{ generated_at: string; assets: LabAsset[]; opportunities: LabOpportunity[] }>('/lab/opportunities'),
   labStart: (body: {
     symbol: string;

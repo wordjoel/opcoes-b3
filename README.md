@@ -9,6 +9,8 @@ Análise de opções da B3 para uso pessoal. Só análise: não existe envio de 
 
 Convenções e limitações: `docs/quant-convencoes.md`.
 
+Carteira, gestor de risco, supervisor e registro de decisões: `docs/agentes-estado.md`.
+
 ## Rodar localmente
 
 Na primeira vez, gere a senha e copie as duas linhas para `.env.turso` (modelo em `.env.example`), junto com `B3_INSECURE_COOKIE=1`:
