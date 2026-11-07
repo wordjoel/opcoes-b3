@@ -1,6 +1,5 @@
-# Fica fora do deploy. A API usa app, core, data, db e quant.
+# Fica fora do deploy. A API usa app, agents, core, data, db e quant.
 .venv
-agents
 tests
 docs
 scripts
