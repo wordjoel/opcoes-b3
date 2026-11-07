@@ -23,6 +23,7 @@ from data.normalizer import is_stock_symbol, normalize_symbol
 from data.providers.base import DataProvider
 from data.providers.brapi import BrapiProvider
 from data.providers.composite import SourceChain
+from data.providers.b3_eventos import SHARED_ACTIONS
 from data.providers.cotahist import SHARED_FILES, CotahistProvider, ingest_recent
 from db.client import Database, DatabaseError
 
@@ -114,7 +115,7 @@ def default_provider(database: Database) -> DataProvider:
     e é esse preço que mede quanto o ativo andou desde a grade."""
     token = os.environ.get("BRAPI_API_KEY")
     brapi = BrapiProvider(token=token)
-    official = CotahistProvider(database)
+    official = CotahistProvider(database, actions=SHARED_ACTIONS)
     market = [brapi, official] if token else [official]
     return CachingProvider(SourceChain(market, events=brapi, quotes=[brapi, official]), database)
 

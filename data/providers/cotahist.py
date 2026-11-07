@@ -37,6 +37,7 @@ from core.types import (
     SourceKind,
 )
 from data.normalizer import normalize_symbol
+from data.providers.b3_eventos import B3CorporateActions, adjust_bars
 from data.providers.base import AtmIvSample, DataProvider
 from db.client import Database
 from quant.greeks import option_greeks
@@ -331,8 +332,11 @@ class CotahistProvider(DataProvider):
         files: CotahistFiles | None = None,
         rates: SelicRates | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        actions: B3CorporateActions | None = None,
     ) -> None:
+        """`actions`: eventos corporativos para ajustar o histórico. None = histórico sem ajuste."""
         self._database = database
+        self._actions = actions
         self._files = files or SHARED_FILES
         self._rates = rates or SHARED_RATES
         self._now = now
@@ -447,7 +451,7 @@ class CotahistProvider(DataProvider):
             points[session.day] = (stock.open, stock.high, stock.low, stock.close, stock.volume)
         if not points:
             raise DataInsufficientError(f"histórico de {symbol} ainda não carregado da B3")
-        return [
+        bars = [
             PriceBar(
                 symbol=symbol,
                 day=day,
@@ -461,6 +465,20 @@ class CotahistProvider(DataProvider):
             )
             for day, point in sorted(points.items())
         ]
+        return self._adjusted(bars, stock.isin if stock else None, symbol)
+
+    def _adjusted(self, bars: list[PriceBar], isin: str | None, symbol: str) -> list[PriceBar]:
+        """Sem eventos ou sem ISIN, devolve sem ajuste, marcado como tal: a tela avisa."""
+        if self._actions is None or not isin:
+            return bars
+        try:
+            cash, shares = self._actions.events(symbol[:4])
+        except DataInsufficientError:
+            return bars
+        if not any(event.isin == isin for event in [*cash, *shares]):
+            # Nenhum evento deste ISIN (comum em units): não dá para afirmar que não houve provento.
+            return bars
+        return adjust_bars(bars, isin, cash, shares)
 
     def get_upcoming_events(self, symbol: str, today: date) -> list[CorporateEvent]:
         raise DataInsufficientError("a B3 não publica a agenda de eventos neste arquivo")
