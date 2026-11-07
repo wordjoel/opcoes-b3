@@ -421,6 +421,14 @@ class TestForward:
         unit = db.fetch("SELECT pnl_unit FROM lab_marks WHERE strategy_id = ?", (with_cost,))[0][0]
         assert a["pnl_brl"] == pytest.approx(unit * a["lots"] - 20.0)
 
+    def test_owner_schedule_fills_cost_when_not_informed(self, db):
+        from quant.costs import CostSchedule
+
+        plan = lab.LabPlan(10_000.0, 30, cost_schedule=CostSchedule(per_order_brl=5.0, fee_pct=0.0, income_tax_pct=15.0))
+        detail = lab.strategy_detail(db, start(HistoryProvider(), db, plan)["id"])
+        assert detail["cost_informed"] == 1
+        assert detail["cost_brl"] == pytest.approx(5.0 * 2 * len(detail["legs"]))
+
 
 BT_PLAN = lab.LabPlan(capital_brl=100_000.0, period_days=5)
 

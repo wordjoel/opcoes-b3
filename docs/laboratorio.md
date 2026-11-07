@@ -46,7 +46,7 @@ Cada resultado mostra o fechamento e o limite conservador, com compra no ask e v
 - **Execução:** não há preço de execução real. Os dois limites delimitam a dúvida, mas não a resolvem.
 - **Fechamentos não simultâneos:** as pernas podem ter negociado em horários diferentes, inclusive nas estruturas selecionadas.
 - **Alvo e stop:** avaliados nas datas marcadas, não dentro do dia. O backtest marca só em 1, 3, 5, 10, 15 e 30 pregões, então o drawdown é aproximado.
-- **Custos:** só entram se informados.
+- **Custos:** o valor informado na entrada tem prioridade. Sem ele, o custo sai da tabela de custos do proprietário, pelo número de lotes. Sem nenhum dos dois, o resultado fica marcado como sem custos.
 - **Monitoramento:** diário, porque a fonte é de fim de dia.
 - **Cobertura:** a varredura usa a lista de ativos acompanhados. Sem token da brapi, só a PETR4 tem opções.
 - **Margem:** não modelada.

@@ -12,6 +12,7 @@ from statistics import mean
 
 from core.calendario_b3 import trading_days_between
 from core.text import decimal_comma
+from quant.costs import CostSchedule, net_of_costs, round_trip_cost
 from core.types import CorporateEvent, ExerciseStyle, LegAction, OptionLeg, OptionQuote, RiskAssessment, StrategyProposal
 from quant.payoff import net_premium, position_pnl, probability_of_profit
 from quant.pricing.binomial import model_value
@@ -61,18 +62,27 @@ class CapitalLimits:
 
 
 def decide(
-    proposal: StrategyProposal, rules: RiskAssessment, capital: CapitalLimits | None, spot_drift: float | None
+    proposal: StrategyProposal,
+    rules: RiskAssessment,
+    capital: CapitalLimits | None,
+    spot_drift: float | None,
+    costs: CostSchedule | None = None,
 ) -> dict:
     """APROVADA só com regras cumpridas, capital e limite informados, e todos os dados presentes.
 
     Perna vendida exige margem, calculada pela B3 e pela corretora, que não temos: nesse caso o
     capital necessário fica desconhecido e a estrutura nunca é aprovada. A perda máxima continua
     informada, mas não substitui a margem.
+
+    Custos entram na perda comparada ao limite. Sem custos informados, nada é aprovado:
+    o proprietário pode informar zero se de fato não paga corretagem.
     """
     legs = proposal.legs
     has_sold_leg = any(leg.action is LegAction.SELL for leg in legs)
     debit = sum(leg.premium * leg.quantity * (1 if leg.action is LegAction.BUY else -1) for leg in legs)
-    required = None if has_sold_leg else debit
+    cost = round_trip_cost(legs, costs) if costs else None
+    loss_with_costs = proposal.max_loss + cost if proposal.max_loss is not None and cost is not None else proposal.max_loss
+    required = None if has_sold_leg else debit + (cost or 0.0) / 2
 
     reasons: list[str] = []
     missing: list[str] = []
@@ -86,10 +96,13 @@ def decide(
         missing.append("capital e limite de perda não informados")
     else:
         limit = capital.capital_brl * capital.max_loss_pct / 100
-        if proposal.max_loss is not None and proposal.max_loss > limit:
-            reasons.append(decimal_comma(f"perda máxima de R$ {proposal.max_loss:.2f} acima do limite de R$ {limit:.2f}"))
+        if loss_with_costs is not None and loss_with_costs > limit:
+            label = "perda máxima com custos" if cost is not None else "perda máxima"
+            reasons.append(decimal_comma(f"{label} de R$ {loss_with_costs:.2f} acima do limite de R$ {limit:.2f}"))
         if required is not None and required > capital.capital_brl:
             reasons.append(decimal_comma(f"custo de R$ {required:.2f} acima do capital de R$ {capital.capital_brl:.2f}"))
+    if costs is None:
+        missing.append("custos operacionais não informados")
     if has_sold_leg:
         missing.append("margem da corretora não disponível para perna vendida")
     if spot_drift is None:
@@ -99,13 +112,15 @@ def decide(
 
     status = "REPROVADA" if reasons else "INCOMPLETA" if missing else "APROVADA"
     limit_brl = capital.capital_brl * capital.max_loss_pct / 100 if capital else None
-    max_risk_pct = proposal.max_loss / capital.capital_brl * 100 if capital and proposal.max_loss is not None else None
+    max_risk_pct = loss_with_costs / capital.capital_brl * 100 if capital and loss_with_costs is not None else None
     return {
         "status": status,
         "reasons": reasons,
         "missing": missing,
         "capital_required": required,
-        "max_risk": proposal.max_loss,
+        "max_risk": loss_with_costs,
+        "costs_brl": cost,
+        "max_profit_net": net_of_costs(proposal.max_profit, cost, costs) if costs and cost is not None else None,
         "max_risk_pct": max_risk_pct,
         "limit_brl": limit_brl,
         "risk_reward": proposal.risk_reward_ratio,

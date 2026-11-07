@@ -185,6 +185,8 @@ export interface Candidate {
     max_risk_pct: number | null;
     limit_brl: number | null;
     risk_reward: number | null;
+    costs_brl?: number | null;
+    max_profit_net?: number | null;
   };
 }
 
@@ -205,6 +207,7 @@ export interface StrategiesView {
   regime: Regime | null;
   profile: Profile | null;
   capital_configured: boolean;
+  costs_configured?: boolean;
   iv_rank: number | null;
   iv_percentile: number | null;
   iv_samples: number;

@@ -24,14 +24,14 @@
 - **Volatilidade constante:** cada cálculo usa uma só `sigma`, sem superfície de volatilidade.
 - **Probabilidade de lucro:** é neutra ao risco e lognormal. Mostra o que os parâmetros implicam, não uma previsão, e não é certeza.
 - **Payoff:** só no vencimento e para um único vencimento. Calendário e diagonal são recusados até existir um modelo para eles.
-- **Custos:** corretagem, emolumentos e impostos não entram no P&L.
+- **Custos:** informados pelo proprietário em `cost_settings` (corretagem por ordem, taxas da B3 em % do financeiro, alíquota sobre o ganho). Modelo de ida e volta em `quant/costs.py`: uma ordem por perna na montagem e outra no desmonte, com taxas sobre o financeiro da montagem nas duas pontas. A perda máxima comparada ao limite inclui os custos. O ganho líquido aplica o imposto como se a estrutura não fosse compensada no mês, então serve de teto, não de DARF. Exercício no vencimento não tem custo próprio no modelo. O payoff e os breakevens continuam brutos.
 - **Volatilidade implícita:** devolve `None` quando nenhuma volatilidade entre 0,01% e 500% explica o preço.
 
 ## Estratégias e risco
 
 - **Preço em grade de fim de dia:** todas as pernas usam o fechamento, marcado como indicativo. Bid e ask dessa grade são sobras após o pregão (PETRL497 em 30/10: 607.600 opções negociadas e ofertas finais de 0,25 x 18,50), então não servem de preço nem de medida de liquidez. Os fechamentos das pernas não são simultâneos.
 - **Montagem:** as 11 estruturas de um único vencimento buscam o strike mais próximo de um alvo a cada 5% do ativo. Sem strike a até meia largura do alvo, a estrutura é listada como indisponível.
-- **Decisão:** `APROVADA` exige regras cumpridas, capital e limite definidos pelo proprietário, e todos os dados presentes. Sem algum deles, `INCOMPLETA`; regra violada, `REPROVADA`. Não é recomendação. Os limites de `RiskLimits` são escolhas iniciais do projeto, não padrões de mercado.
+- **Decisão:** `APROVADA` exige regras cumpridas, capital, limite e custos definidos pelo proprietário, e todos os dados presentes. Sem algum deles, `INCOMPLETA`; regra violada, `REPROVADA`. Não é recomendação. Os limites de `RiskLimits` são escolhas iniciais do projeto, não padrões de mercado.
 - **Margem:** é calculada pela B3 e pela corretora, e não temos esse dado. Estrutura com perna vendida nunca é aprovada, mesmo com perda máxima definida; só compras a débito, cujo capital necessário é o próprio custo.
 - **Defasagem:** se o ativo tiver se movido mais de 3% desde o pregão da grade, todas as estruturas são reprovadas.
 - **Liquidez:** 40% contratos em aberto, 40% volume e 20% negócios, com referências de 1.000.000, 100.000 e 100 opções e negócios. O mínimo para aprovar é 0,50.

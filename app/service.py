@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
 from core.calendario_b3 import trading_days_between
+from quant.costs import CostSchedule
 from core.clock import MARKET_TZ, market_today
 from core.config import DataQualityLimits
 from core.exceptions import DataInsufficientError
@@ -259,6 +260,7 @@ def strategies_view(
     limits: RiskLimits = RiskLimits(),
     profile: str | None = None,
     capital: CapitalLimits | None = None,
+    costs: CostSchedule | None = None,
 ) -> dict:
     chain, report = _load_chain(provider, symbol, expiry, now)
     if chain.risk_free_rate is None or chain.time_to_expiry_years is None:
@@ -327,7 +329,7 @@ def strategies_view(
                 },
                 "payoff": [{"price": price, "pnl": pnl} for price, pnl in payoff_curve(proposal.legs, spot)],
                 "heatmap": pnl_heatmap(proposal.legs, ivs, spot, t, r, [quote.style for quote in candidate.quotes]),
-                "decision": decide(proposal, risk, capital, drift),
+                "decision": decide(proposal, risk, capital, drift, costs),
             }
         )
     rows.sort(
@@ -354,6 +356,7 @@ def strategies_view(
         "regime": regime.value if regime else None,
         "profile": profile,
         "capital_configured": capital is not None,
+        "costs_configured": costs is not None,
         "iv_rank": rank_row["iv_rank"],
         "iv_percentile": rank_row["iv_percentile"],
         "iv_samples": rank_row["iv_samples"],

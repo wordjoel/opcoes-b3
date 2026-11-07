@@ -56,6 +56,7 @@ beforeEach(() => {
     'GET /api/assets/PETR4/strategies': { body: strategies },
     'GET /api/assets/PETR4/chain': { body: { symbol: 'PETR4', expiry: '2026-12-18', market_date: '2026-10-30', spot: 50, risk_free_rate: 0.1, provenance: {}, quality: { is_valid: true, issues: [] }, open_interest: { calls: 100, puts: 200, put_call_ratio: 2, calls_change: 5, puts_change: null }, quotes: [] } },
     'GET /api/settings/risk': { body: { capital_brl: null, max_loss_pct: null, updated_at: null } },
+    'GET /api/settings/costs': { body: { per_order_brl: null, fee_pct: null, income_tax_pct: null, updated_at: null } },
   };
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
@@ -177,6 +178,20 @@ describe('estratégias', () => {
     expect(await screen.findByText('Capital e limite salvos.')).toBeTruthy();
     const put = calls.find((call) => call.method === 'PUT')!;
     expect(JSON.parse(put.body!)).toEqual({ capital_brl: 10000, max_loss_pct: 5 });
+    await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/strategies')).length).toBeGreaterThan(before));
+  });
+
+  it('salva os custos e recalcula', async () => {
+    routes['PUT /api/settings/costs'] = { body: { per_order_brl: 2.5, fee_pct: 0.03, income_tax_pct: 15, updated_at: '2026-11-03T15:00:00+00:00' } };
+    await open();
+    const before = calls.filter((call) => call.path.endsWith('/strategies')).length;
+    await userEvent.type(screen.getByLabelText('Corretagem por ordem (R$)'), '2.5');
+    await userEvent.type(screen.getByLabelText('Taxas da B3 (% do financeiro)'), '0.03');
+    await userEvent.type(screen.getByLabelText('Imposto sobre o ganho (%)'), '15');
+    await userEvent.click(screen.getByRole('button', { name: 'Salvar custos' }));
+    expect(await screen.findByText('Custos salvos.')).toBeTruthy();
+    const put = calls.find((call) => call.method === 'PUT')!;
+    expect(JSON.parse(put.body!)).toEqual({ per_order_brl: 2.5, fee_pct: 0.03, income_tax_pct: 15 });
     await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/strategies')).length).toBeGreaterThan(before));
   });
 

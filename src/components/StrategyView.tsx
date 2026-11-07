@@ -103,6 +103,7 @@ export function StrategyView({ symbols, symbol, onSymbol }: StrategyViewProps) {
       </header>
 
       <RiskSettingsForm onSaved={strategies.reload} />
+      <CostSettingsForm onSaved={strategies.reload} />
 
       {!symbol && <p>Selecione um ativo.</p>}
       {expirations.loading && <Loading label="Buscando vencimentos..." />}
@@ -163,6 +164,65 @@ function RiskSettingsForm({ onSaved }: { onSaved: () => void }) {
         <input type="number" min="0.01" max="100" step="0.01" required value={limit} onChange={(event) => setLimit(event.target.value)} className="np-input block mt-1 w-40" />
       </label>
       <button type="submit" className="np-btn">
+        Salvar
+      </button>
+      {message && <p role="status" className="basis-full text-base">{message}</p>}
+      {failure && <p role="alert" className="basis-full text-accent text-base">{failure}</p>}
+    </form>
+  );
+}
+
+function CostSettingsForm({ onSaved }: { onSaved: () => void }) {
+  const settings = useResource('cost-settings', api.costSettings);
+  const [perOrder, setPerOrder] = useState('');
+  const [fee, setFee] = useState('');
+  const [tax, setTax] = useState('');
+  const [message, setMessage] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (settings.data?.per_order_brl != null) setPerOrder(String(settings.data.per_order_brl));
+    if (settings.data?.fee_pct != null) setFee(String(settings.data.fee_pct));
+    if (settings.data?.income_tax_pct != null) setTax(String(settings.data.income_tax_pct));
+  }, [settings.data]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setMessage(null);
+    setFailure(null);
+    try {
+      await api.saveCostSettings(Number(perOrder), Number(fee), Number(tax));
+      setMessage('Custos salvos.');
+      settings.reload();
+      onSaved();
+    } catch (error) {
+      setFailure((error as ApiError).status === 422 ? 'Corretagem a partir de zero, taxas entre 0 e 5% e alíquota entre 0 e 100%.' : (error as ApiError).message);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="np-section flex flex-wrap items-end gap-3">
+      <div className="basis-full md:basis-auto md:max-w-sm">
+        <h3 className="text-xl">Seus custos</h3>
+        <p className="font-display text-xs text-ink-2 mt-1">
+          {settings.data?.per_order_brl != null
+            ? `Última alteração: ${formatMoment(settings.data.updated_at)}`
+            : 'Sem custos informados, nenhuma estrutura é aprovada. Se não paga corretagem, informe zero.'}
+        </p>
+      </div>
+      <label className="np-label">
+        Corretagem por ordem (R$)
+        <input type="number" min="0" step="0.01" required value={perOrder} onChange={(event) => setPerOrder(event.target.value)} className="np-input block mt-1 w-32" />
+      </label>
+      <label className="np-label">
+        Taxas da B3 (% do financeiro)
+        <input type="number" min="0" max="5" step="0.0001" required value={fee} onChange={(event) => setFee(event.target.value)} className="np-input block mt-1 w-32" />
+      </label>
+      <label className="np-label">
+        Imposto sobre o ganho (%)
+        <input type="number" min="0" max="100" step="0.01" required value={tax} onChange={(event) => setTax(event.target.value)} className="np-input block mt-1 w-32" />
+      </label>
+      <button type="submit" className="np-btn" aria-label="Salvar custos">
         Salvar
       </button>
       {message && <p role="status" className="basis-full text-base">{message}</p>}
@@ -331,7 +391,17 @@ function Detail({ item, spot }: { item: Candidate; spot: number }) {
         <Stat label={item.net_premium >= 0 ? 'Débito' : 'Crédito'} value={formatCurrency(Math.abs(item.net_premium))} hint="Na montagem" />
         <Stat label="Prob. de lucro" value={formatRatio(item.probability_of_profit, 0)} hint="Neutra ao risco; não é previsão" />
       </div>
-      <div className="np-facts" style={{ '--np-columns': 3 } as CSSProperties}>
+      <div className="np-facts" style={{ '--np-columns': 5 } as CSSProperties}>
+        <Stat
+          label="Custos"
+          value={decision.costs_brl != null ? formatCurrency(decision.costs_brl) : 'Não informados'}
+          hint="Montagem e desmonte; perda máxima com custos entra no limite"
+        />
+        <Stat
+          label="Ganho líquido máx."
+          value={decision.costs_brl != null ? formatLimit(decision.max_profit_net ?? null) : '—'}
+          hint="Após custos e imposto, sem compensar prejuízos"
+        />
         <Stat label="Capital necessário" value={decision.capital_required !== null ? formatCurrency(decision.capital_required) : 'Margem desconhecida'} hint={decision.capital_required === null ? 'Calculada pela B3 e pela corretora' : 'Custo da montagem'} />
         <Stat label="Limite de perda" value={decision.limit_brl !== null ? formatCurrency(decision.limit_brl) : 'Não informado'} />
         <Stat label="Risco / retorno" value={item.risk_reward !== null ? `1 : ${formatNumber(item.risk_reward)}` : 'Sem limite definido'} />

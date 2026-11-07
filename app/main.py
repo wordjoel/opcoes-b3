@@ -17,6 +17,7 @@ from app.cache import CachingProvider
 from core.clock import market_today
 from core.config import load_local_env
 from core.exceptions import DataInsufficientError
+from quant.costs import CostSchedule
 from quant.risk import CapitalLimits
 from data.normalizer import is_stock_symbol, normalize_symbol
 from data.providers.base import DataProvider
@@ -66,6 +67,12 @@ class LoginRequest(BaseModel):
 class RiskSettingsRequest(BaseModel):
     capital_brl: float = Field(gt=0, le=1_000_000_000)
     max_loss_pct: float = Field(gt=0, le=100)
+
+
+class CostSettingsRequest(BaseModel):
+    per_order_brl: float = Field(ge=0, le=10_000)
+    fee_pct: float = Field(ge=0, le=5)
+    income_tax_pct: float = Field(ge=0, le=100)
 
 
 class LabStartRequest(BaseModel):
@@ -237,6 +244,33 @@ def create_app(
             "updated_at": updated_at,
         }
 
+    def read_costs(db: Database) -> tuple[CostSchedule | None, str | None]:
+        rows = db.fetch("SELECT per_order_brl, fee_pct, income_tax_pct, updated_at FROM cost_settings WHERE id = 1")
+        return (CostSchedule(rows[0][0], rows[0][1], rows[0][2]), rows[0][3]) if rows else (None, None)
+
+    def costs_view(db: Database) -> dict:
+        costs, updated_at = read_costs(db)
+        return {
+            "per_order_brl": costs.per_order_brl if costs else None,
+            "fee_pct": costs.fee_pct if costs else None,
+            "income_tax_pct": costs.income_tax_pct if costs else None,
+            "updated_at": updated_at,
+        }
+
+    @router.get("/settings/costs", dependencies=protected)
+    def get_cost_settings(db: Database = Depends(database)) -> dict:
+        return costs_view(db)
+
+    @router.put("/settings/costs", dependencies=protected)
+    def put_cost_settings(body: CostSettingsRequest, db: Database = Depends(database)) -> dict:
+        db.run(
+            "INSERT INTO cost_settings (id, per_order_brl, fee_pct, income_tax_pct, updated_at) VALUES (1, ?, ?, ?, ?) "
+            "ON CONFLICT (id) DO UPDATE SET per_order_brl = excluded.per_order_brl, fee_pct = excluded.fee_pct, "
+            "income_tax_pct = excluded.income_tax_pct, updated_at = excluded.updated_at",
+            (body.per_order_brl, body.fee_pct, body.income_tax_pct, now().isoformat()),
+        )
+        return costs_view(db)
+
     @router.get("/settings/risk", dependencies=protected)
     def get_risk_settings(db: Database = Depends(database)) -> dict:
         return capital_view(db)
@@ -313,11 +347,12 @@ def create_app(
     @router.get("/lab/opportunities", dependencies=protected)
     def lab_opportunities(db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
         capital, _ = read_capital(db)
-        return lab.discover(source, watchlist_symbols(db), now(), capital)
+        costs, _ = read_costs(db)
+        return lab.discover(source, watchlist_symbols(db), now(), capital, costs=costs)
 
     @router.post("/lab/strategies", dependencies=protected)
     def lab_start(body: LabStartRequest, db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
-        plan = lab.LabPlan(body.capital_brl, body.period_days, body.target_pct, body.stop_pct, body.cost_brl)
+        plan = lab.LabPlan(body.capital_brl, body.period_days, body.target_pct, body.stop_pct, body.cost_brl, read_costs(db)[0])
         return lab.start_forward(source, db, _valid_symbol(body.symbol), body.agent, body.key, plan, now())
 
     @router.get("/lab/strategies", dependencies=protected)
@@ -337,7 +372,7 @@ def create_app(
 
     @router.post("/lab/backtests", dependencies=protected)
     def lab_backtest(body: LabBacktestRequest, db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
-        plan = lab.LabPlan(body.capital_brl, body.period_days, body.target_pct, body.stop_pct, body.cost_brl)
+        plan = lab.LabPlan(body.capital_brl, body.period_days, body.target_pct, body.stop_pct, body.cost_brl, read_costs(db)[0])
         return lab.run_backtest(source, db, _valid_symbol(body.symbol), plan, body.weeks, now())
 
     @router.get("/lab/ranking", dependencies=protected)
@@ -367,7 +402,8 @@ def create_app(
         db: Database = Depends(database),
     ) -> dict:
         capital, _ = read_capital(db)
-        return service.strategies_view(source, _valid_symbol(symbol), expiry, now(), profile=profile, capital=capital)
+        costs, _ = read_costs(db)
+        return service.strategies_view(source, _valid_symbol(symbol), expiry, now(), profile=profile, capital=capital, costs=costs)
 
     app.include_router(router)
     return app

@@ -11,6 +11,7 @@ from core.types import ExerciseStyle, OptionKind
 from db.client import Database, migrate
 from quant.pricing.binomial import american_price, model_value
 from quant.pricing.black_scholes import option_price
+from quant.costs import CostSchedule
 from quant.risk import CapitalLimits, assess_risk, decide, pnl_heatmap, stress_tests
 from quant.strategies import build_candidates
 from tests.helpers import leg, quote
@@ -23,10 +24,13 @@ def candidate(key):
     return next(item for item in built if item.key == key)
 
 
-def evaluate(key, capital, drift=0.0, quotes=None):
+ZERO_COSTS = CostSchedule(0.0, 0.0, 0.0)
+
+
+def evaluate(key, capital, drift=0.0, quotes=None, costs=ZERO_COSTS):
     item = candidate(key)
     rules = assess_risk(item.proposal, quotes or item.quotes, SPOT, 0.12, 0.1375, drift, use_book=False)
-    return decide(item.proposal, rules, capital, drift)
+    return decide(item.proposal, rules, capital, drift, costs)
 
 
 CAPITAL = CapitalLimits(capital_brl=10_000.0, max_loss_pct=5.0)
@@ -40,6 +44,24 @@ class TestDecision:
         assert result["max_risk"] == pytest.approx(100.0)
         assert result["max_risk_pct"] == pytest.approx(1.0)
         assert result["limit_brl"] == pytest.approx(500.0)
+
+    def test_without_costs_is_never_approved(self):
+        result = evaluate("long_call", CAPITAL, costs=None)
+        assert result["status"] == "INCOMPLETA"
+        assert "custos operacionais não informados" in result["missing"]
+
+    def test_costs_enter_the_loss_and_the_profit(self):
+        # 2 ordens de R$ 5, 0,5% sobre R$ 100 nas duas pontas = R$ 11; imposto de 15% sobre o ganho.
+        result = evaluate("long_call", CAPITAL, costs=CostSchedule(5.0, 0.5, 15.0))
+        assert result["costs_brl"] == pytest.approx(11.0)
+        assert result["max_risk"] == pytest.approx(111.0)
+        assert result["capital_required"] == pytest.approx(105.5)
+        assert result["max_profit_net"] is None  # call comprada: ganho ilimitado
+
+    def test_costs_can_push_loss_over_the_limit(self):
+        result = evaluate("long_call", CapitalLimits(capital_brl=10_000.0, max_loss_pct=1.05), costs=CostSchedule(5.0, 0.0, 0.0))
+        assert result["status"] == "REPROVADA"
+        assert any("com custos" in reason for reason in result["reasons"])
 
     def test_without_capital_is_never_approved(self):
         result = evaluate("long_call", None)
@@ -165,6 +187,10 @@ class TestRiskSettingsRoutes:
         assert {row["decision"]["status"] for row in before["candidates"]} <= {"INCOMPLETA", "REPROVADA"}
         saved = client.put("/api/settings/risk", json={"capital_brl": 10_000, "max_loss_pct": 5})
         assert saved.status_code == 200 and saved.json()["capital_brl"] == 10_000
+        still = client.get(f"/api/assets/PETR4/strategies?expiry={EXPIRY}").json()
+        assert {row["decision"]["status"] for row in still["candidates"]} <= {"INCOMPLETA", "REPROVADA"}
+        costs = client.put("/api/settings/costs", json={"per_order_brl": 0, "fee_pct": 0, "income_tax_pct": 15})
+        assert costs.status_code == 200 and costs.json()["income_tax_pct"] == 15
         after = client.get(f"/api/assets/PETR4/strategies?expiry={EXPIRY}").json()
         by_key = {row["key"]: row for row in after["candidates"]}
         assert by_key["long_call"]["decision"]["status"] == "APROVADA"
@@ -173,6 +199,13 @@ class TestRiskSettingsRoutes:
     @pytest.mark.parametrize("body", [{"capital_brl": 0, "max_loss_pct": 5}, {"capital_brl": 100, "max_loss_pct": 0}, {"capital_brl": 100, "max_loss_pct": 101}, {"capital_brl": 100}])
     def test_invalid_values_are_refused(self, client, body):
         assert client.put("/api/settings/risk", json=body).status_code == 422
+
+    @pytest.mark.parametrize("body", [{"per_order_brl": -1, "fee_pct": 0, "income_tax_pct": 15}, {"per_order_brl": 0, "fee_pct": 6, "income_tax_pct": 15}, {"per_order_brl": 0, "fee_pct": 0}])
+    def test_invalid_costs_are_refused(self, client, body):
+        assert client.put("/api/settings/costs", json=body).status_code == 422
+
+    def test_costs_start_empty(self, client):
+        assert client.get("/api/settings/costs").json()["per_order_brl"] is None
 
     def test_requires_session(self, tmp_path):
         db = Database(str(tmp_path / "d.db"))

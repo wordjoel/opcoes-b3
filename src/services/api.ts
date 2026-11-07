@@ -52,6 +52,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ capital_brl, max_loss_pct }),
     }),
+  costSettings: () =>
+    request<{ per_order_brl: number | null; fee_pct: number | null; income_tax_pct: number | null; updated_at: string | null }>(
+      '/settings/costs',
+    ),
+  saveCostSettings: (per_order_brl: number, fee_pct: number, income_tax_pct: number) =>
+    request<{ per_order_brl: number; fee_pct: number; income_tax_pct: number; updated_at: string }>('/settings/costs', {
+      method: 'PUT',
+      body: JSON.stringify({ per_order_brl, fee_pct, income_tax_pct }),
+    }),
   labOpportunities: () => request<{ generated_at: string; assets: LabAsset[]; opportunities: LabOpportunity[] }>('/lab/opportunities'),
   labStart: (body: {
     symbol: string;

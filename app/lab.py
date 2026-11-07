@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 
 from app.service import _try_bars, _regime, spot_drift
 from core.calendario_b3 import add_trading_days
+from quant.costs import CostSchedule, round_trip_cost
 from core.clock import grid_still_current, market_today
 from core.exceptions import DataInsufficientError
 from core.types import LegAction, OptionChain, OptionKind, OptionLeg
@@ -125,6 +126,7 @@ def discover(
     now: datetime,
     capital: CapitalLimits | None = None,
     budget_seconds: float = _DISCOVER_BUDGET_SECONDS,
+    costs: CostSchedule | None = None,
 ) -> dict:
     """Propostas de todos os agentes, com o resultado da avaliação de risco. Nada é aprovado sem dado."""
     today = market_today(now)
@@ -187,7 +189,7 @@ def discover(
                         "potential_return": proposal.max_profit / proposal.max_loss if proposal.max_profit is not None else None,
                         "theoretical_return": theoretical / proposal.max_loss if theoretical is not None else None,
                         "liquidity_score": min((leg_liquidity(q, use_book=False) or 0) for q in candidate.quotes),
-                        "decision": decide(proposal, rules, capital, drift),
+                        "decision": decide(proposal, rules, capital, drift, costs),
                     }
                 )
     opportunities.sort(
@@ -212,6 +214,8 @@ class LabPlan:
     stop_pct: float | None = None
     # None = o proprietário não informou custos: o resultado fica marcado como "sem custos".
     cost_brl: float | None = None
+    # Usado quando cost_brl não foi informado: o custo sai da tabela do proprietário.
+    cost_schedule: CostSchedule | None = None
 
 
 def _insert_strategy(
@@ -236,6 +240,9 @@ def _insert_strategy(
     if size is None:
         raise DataInsufficientError("o capital hipotético não comporta nem um lote desta estrutura")
     entry_book = book_entry(proposal.legs, {quote.symbol: quote for quote in candidate.quotes})
+    cost = plan.cost_brl
+    if cost is None and plan.cost_schedule is not None:
+        cost = round_trip_cost(proposal.legs, plan.cost_schedule, size.lots)
     identity = _strategy_id(mode, agent, candidate.key, symbol, expiry, entry, proposal.legs, plan.capital_brl, end_day)
     if db.fetch("SELECT 1 FROM lab_strategies WHERE id = ?", (identity,)):
         return identity, False
@@ -248,7 +255,7 @@ def _insert_strategy(
             identity, mode, agent, symbol, candidate.key, proposal.name, expiry.isoformat(), entry.isoformat(), end_day.isoformat(),
             json.dumps([leg.model_dump(mode="json") for leg in proposal.legs]), plan.capital_brl, size.lots,
             net_premium(proposal.legs), proposal.max_profit, proposal.max_loss, json.dumps(proposal.breakeven_points), probability,
-            theoretical, regime, plan.target_pct, plan.stop_pct, plan.cost_brl or 0.0, 0 if plan.cost_brl is None else 1, "ATIVA", source,
+            theoretical, regime, plan.target_pct, plan.stop_pct, cost or 0.0, 0 if cost is None else 1, "ATIVA", source,
             now.isoformat(),
             json.dumps(entry_book) if entry_book else None,
         ),
