@@ -189,6 +189,60 @@ export interface Candidate {
     max_profit_net?: number | null;
   };
   portfolio?: { decision: 'APPROVED' | 'REJECTED'; reasons: string[] } | null;
+  /** BASE: estruturas clássicas; RANKING: travas mais rentáveis da varredura. */
+  group?: 'BASE' | 'RANKING';
+  /** Tipo didático da estrutura (chave do guia). */
+  family?: string;
+  ranking?: { rank: number; expected_pnl: number; expected_return_on_risk: number; max_return_on_risk: number | null } | null;
+}
+
+export interface CalendarLegView {
+  symbol: string;
+  action: 'BUY' | 'SELL';
+  kind: 'CALL' | 'PUT';
+  strike: number;
+  expiry: string;
+  /** Anos até o vencimento desta perna. */
+  t: number;
+  quantity: number;
+  premium: number;
+  price_basis: 'BOOK' | 'CLOSE';
+  iv: number | null;
+  delta: number | null;
+  style: 'AMERICAN' | 'EUROPEAN' | null;
+}
+
+export interface CalendarCandidate {
+  key: string;
+  family: string;
+  name: string;
+  rationale: string;
+  net_premium: number;
+  max_profit: number | null;
+  max_loss: number;
+  breakevens: number[];
+  probability_of_profit: number;
+  expected_pnl: number;
+  payoff: { price: number; pnl: number }[];
+  legs: CalendarLegView[];
+  warnings: string[];
+  assumptions: string[];
+  decision: { status: DecisionStatus; reasons: string[]; missing: string[] };
+}
+
+export interface CalendarsView {
+  symbol: string;
+  near: string;
+  far: string;
+  market_date: string | null;
+  spot: number;
+  risk_free_rate: number;
+  t_near: number;
+  t_far: number;
+  business_days_to_near: number;
+  source: string | null;
+  candidates: CalendarCandidate[];
+  unavailable: { key: string; name: string; reason: string }[];
 }
 
 export interface PortfolioFill {

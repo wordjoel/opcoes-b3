@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AssetOverview, ChainView, DecisionEntry, LabAsset, LabOpportunity, LabRankingRow, LabStrategy, PortfolioView, Profile, ScannerResponse, StrategiesView } from '../types';
+import type { JarbasContext } from '../lib/jarbasStore';
+import { AssetOverview, CalendarsView, ChainView, DecisionEntry, LabAsset, LabOpportunity, LabRankingRow, LabStrategy, PortfolioView, Profile, ScannerResponse, StrategiesView } from '../types';
 
 export class ApiError extends Error {
   constructor(
@@ -33,13 +34,74 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/login')) onUnauthorized();
-    const detail = typeof body?.detail === 'string' ? body.detail : `Erro ${response.status} no servidor.`;
+    const detail =
+      typeof body?.detail === 'string'
+        ? body.detail
+        : typeof body?.detail?.message === 'string'
+          ? body.detail.message
+          : `Erro ${response.status} no servidor.`;
     throw new ApiError(response.status, detail, body?.label, body?.reasons ?? []);
   }
   return body as T;
 }
 
 const post = (body?: unknown): RequestInit => ({ method: 'POST', body: body ? JSON.stringify(body) : undefined });
+
+export interface JarbasUsage {
+  day: string;
+  questions: number;
+  requests: number;
+  failures: number;
+  tokens: number;
+  daily_limit: number;
+}
+
+export interface JarbasStatus {
+  available: boolean;
+  providers: { name: string; label: string; model: string; paused: boolean }[];
+  usage: JarbasUsage;
+  voice: { speak_replies: boolean; voice_name: string | null; voice_rate: number };
+}
+
+export interface JarbasReply {
+  reply: string;
+  provider: string;
+  model: string;
+  attempts: { provider: string; error: string | null }[];
+  conversation_id: string;
+  tools: string[];
+  usage: { questions: number; daily_limit: number };
+}
+
+export interface JarbasSettings {
+  provider_order: string[];
+  openrouter_model: string | null;
+  allow_paid: boolean;
+  daily_limit: number;
+  retention_days: number;
+  speak_replies: boolean;
+  voice_name: string | null;
+  voice_rate: number;
+  updated_at: string | null;
+  configured_providers: string[];
+}
+
+export interface JarbasModel {
+  id: string;
+  name: string;
+  context_length: number | null;
+  free: boolean;
+  prompt_per_million: number | null;
+  completion_per_million: number | null;
+}
+
+export interface JarbasConversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages?: unknown;
+}
 
 export const api = {
   session: () => request<{ authenticated: boolean; login_ready: boolean }>('/session'),
@@ -95,6 +157,21 @@ export const api = {
     request<{ expirations: string[] }>(`/assets/${encodeURIComponent(symbol)}/expirations`),
   chain: (symbol: string, expiry: string) =>
     request<ChainView>(`/assets/${encodeURIComponent(symbol)}/chain?expiry=${expiry}`),
+  jarbasStatus: () => request<JarbasStatus>('/jarbas/status'),
+  jarbasChat: (question: string, conversationId: string | null, context: JarbasContext | null) =>
+    request<JarbasReply>('/jarbas/chat', post({ question, conversation_id: conversationId ?? undefined, context })),
+  jarbasSettings: () => request<JarbasSettings>('/jarbas/settings'),
+  saveJarbasSettings: (settings: Omit<JarbasSettings, 'updated_at' | 'configured_providers'>) =>
+    request<JarbasSettings>('/jarbas/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+  jarbasModels: () => request<{ configured: boolean; models: JarbasModel[]; chain: string[] }>('/jarbas/models'),
+  jarbasConversations: () => request<{ conversations: JarbasConversation[] }>('/jarbas/conversations'),
+  jarbasConversation: (id: string) =>
+    request<JarbasConversation & { messages: { role: 'user' | 'assistant'; content: string; provider: string | null; model: string | null; created_at: string }[] }>(
+      `/jarbas/conversations/${id}`,
+    ),
+  deleteJarbasConversation: (id: string) => request<{ deleted: boolean }>(`/jarbas/conversations/${id}`, { method: 'DELETE' }),
+  calendars: (symbol: string, near: string, far: string) =>
+    request<CalendarsView>(`/assets/${encodeURIComponent(symbol)}/calendars?near=${near}&far=${far}`),
   strategies: (symbol: string, expiry: string, profile: Profile | null) =>
     request<StrategiesView>(
       `/assets/${encodeURIComponent(symbol)}/strategies?expiry=${expiry}${profile ? `&profile=${profile}` : ''}`,

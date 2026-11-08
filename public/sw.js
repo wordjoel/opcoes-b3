@@ -3,9 +3,10 @@
  * Nunca guarda dados de mercado nem respostas de IA: cotação em cache pareceria atual.
  * Por isso só atende GET da própria origem, fora de /api/.
  * Aumente a versão para descartar o cache antigo.
+ * Versão nova fica em espera até o usuário tocar em "Atualizar": nada troca no meio do uso.
  */
-const CACHE = 'b3-shell-v3';
-const STATIC_FILES = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE = 'b3-shell-v4';
+const STATIC_FILES = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -16,9 +17,12 @@ self.addEventListener('install', (event) => {
       const html = await (await cache.match('/')).text();
       const assets = [...html.matchAll(/\/assets\/[^"']+/g)].map((match) => match[0]);
       await cache.addAll(assets);
-      await self.skipWaiting();
     })(),
   );
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {

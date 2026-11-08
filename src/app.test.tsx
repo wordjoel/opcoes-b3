@@ -1,5 +1,5 @@
 /** Fluxos principais das telas. Respostas da API são fixtures, só deste teste. */
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -31,13 +31,38 @@ const strategies = {
     candidate('long_call', 'Compra de call', decision('APROVADA')),
     candidate('iron_condor', 'Iron condor', decision('INCOMPLETA', { capital_required: null, missing: ['margem da corretora não disponível para perna vendida'] })),
     candidate('long_put', 'Compra de put', decision('REPROVADA', { reasons: ['perda máxima acima do limite'] })),
+    {
+      ...candidate('bull_call_spread#1', 'Trava de alta com call 48/52', decision('INCOMPLETA')),
+      group: 'RANKING',
+      family: 'bull_call_spread',
+      max_profit: 300,
+      ranking: { rank: 1, expected_pnl: 12, expected_return_on_risk: 0.12, max_return_on_risk: 3 },
+    },
   ],
   unavailable: [],
 };
 
+const calendars = {
+  symbol: 'PETR4', near: '2026-12-18', far: '2027-01-15', market_date: '2026-10-30', spot: 50, risk_free_rate: 0.1375,
+  t_near: 0.13, t_far: 0.21, business_days_to_near: 25, source: 'B3',
+  candidates: [
+    {
+      key: 'call_calendar', family: 'call_calendar', name: 'Trava calendário com call', rationale: 'Texto.', net_premium: 80, max_profit: 150,
+      max_loss: 80, breakevens: [46, 54], probability_of_profit: 0.45, expected_pnl: 5, payoff: [],
+      legs: [
+        { symbol: 'LONGA', action: 'BUY', kind: 'CALL', strike: 50, expiry: '2027-01-15', t: 0.21, quantity: 100, premium: 2.3, price_basis: 'CLOSE', iv: 0.3, delta: 0.5, style: 'EUROPEAN' },
+        { symbol: 'CURTA', action: 'SELL', kind: 'CALL', strike: 50, expiry: '2026-12-18', t: 0.13, quantity: 100, premium: 1.5, price_basis: 'CLOSE', iv: 0.3, delta: 0.5, style: 'EUROPEAN' },
+      ],
+      warnings: [], assumptions: ['Premissa de teste.'],
+      decision: { status: 'INCOMPLETA', reasons: [], missing: ['resultado depende da vol futura da perna longa: o app não aprova calendário nem diagonal'] },
+    },
+  ],
+  unavailable: [{ key: 'put_diagonal', name: 'Trava diagonal de baixa com put', reason: 'sem strike' }],
+};
+
 type Route = { status?: number; body: unknown };
 let routes: Record<string, Route>;
-const calls: { path: string; method: string; body?: string }[] = [];
+const calls: { path: string; method: string; body?: string; url?: string }[] = [];
 
 beforeEach(() => {
   calls.length = 0;
@@ -52,7 +77,9 @@ beforeEach(() => {
         history: [{ day: '2026-11-03', open: 1, high: 1, low: 1, close: 1, hv_20d: null, bb_upper: null, bb_middle: null, bb_lower: null }],
       },
     },
-    'GET /api/assets/PETR4/expirations': { body: { expirations: ['2026-12-18'] } },
+    'GET /api/assets/PETR4/expirations': { body: { expirations: ['2026-12-18', '2027-01-15'] } },
+    'GET /api/assets/PETR4/calendars': { body: calendars },
+    'GET /api/jarbas/status': { body: { available: true, providers: [{ name: 'gemini', label: 'Gemini', model: 'm', paused: false }] } },
     'GET /api/assets/PETR4/strategies': { body: strategies },
     'GET /api/assets/PETR4/chain': { body: { symbol: 'PETR4', expiry: '2026-12-18', market_date: '2026-10-30', spot: 50, risk_free_rate: 0.1, provenance: {}, quality: { is_valid: true, issues: [] }, open_interest: { calls: 100, puts: 200, put_call_ratio: 2, calls_change: 5, puts_change: null }, quotes: [] } },
     'GET /api/settings/risk': { body: { capital_brl: null, max_loss_pct: null, updated_at: null } },
@@ -61,7 +88,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     const path = String(url).split('?')[0];
-    calls.push({ path, method, body: init?.body as string });
+    calls.push({ path, method, body: init?.body as string, url: String(url) });
     const route = routes[`${method} ${path}`] ?? { status: 404, body: { detail: 'não encontrado' } };
     return new Response(JSON.stringify(route.body), { status: route.status ?? 200 });
   }));
@@ -193,6 +220,69 @@ describe('estratégias', () => {
     const put = calls.find((call) => call.method === 'PUT')!;
     expect(JSON.parse(put.body!)).toEqual({ per_order_brl: 2.5, fee_pct: 0.03, income_tax_pct: 15 });
     await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/strategies')).length).toBeGreaterThan(before));
+  });
+
+  it('filtra as estruturas pela visão de mercado', async () => {
+    await open();
+    await userEvent.click(screen.getByRole('button', { name: 'Acho que vai cair' }));
+    const list = screen.getByText('Estruturas: 1 de 3 aprovadas').parentElement!;
+    expect(within(list).getByRole('button', { name: /Compra de put/ })).toBeTruthy();
+    expect(within(list).queryByRole('button', { name: /Compra de call/ })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Compra de put' })).toBeTruthy();
+  });
+
+  it('ensina a montagem passo a passo com as séries reais', async () => {
+    await open();
+    expect(screen.getByText('Montagem passo a passo')).toBeTruthy();
+    expect(screen.getByText(/Para quem espera: Alta/)).toBeTruthy();
+    const steps = screen.getByText('Montagem passo a passo').parentElement!.nextElementSibling!;
+    expect(steps.textContent).toMatch(/Compre 100 TESTC \(call, strike R\$\s*50,00\) a R\$\s*1,00 cada: você paga R\$\s*100,00/);
+    expect(screen.getByText(/débito de R\$\s*100,00/)).toBeTruthy();
+  });
+
+  it('mapa responde ao preço escolhido com resultado e probabilidade', async () => {
+    await open();
+    expect(screen.getByText('Chance de lucro')).toBeTruthy();
+    expect(screen.getByText('Estimativa média')).toBeTruthy();
+    fireEvent.change(screen.getByRole('slider', { name: /PETR4 no vencimento/ }), { target: { value: '60' } });
+    const readout = () => screen.getByText((_, element) => element?.tagName === 'P' && /Se PETR4 estiver em/.test(element.textContent ?? ''));
+    await waitFor(() => expect(readout().textContent).toMatch(/R\$\s*60,00/));
+    expect(readout().textContent).toMatch(/resultado é R\$\s*900,00/);
+    expect(readout().textContent).toMatch(/Chance de estar acima desse preço: \d+%/);
+  });
+
+  it('mostra as travas mais rentáveis com as métricas do ranking', async () => {
+    await open();
+    expect(screen.queryByText(/Trava de alta com call 48\/52/)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Travas mais rentáveis (1)' }));
+    expect(screen.getByRole('button', { name: /1º · Trava de alta com call 48\/52/ })).toBeTruthy();
+    expect(screen.getByText(/Retorno máx\. 300% do risco/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Trava de alta com call 48/52' })).toBeTruthy();
+    expect(screen.getByText(/Para quem espera: Alta/)).toBeTruthy();
+  });
+
+  it('monta calendário entre dois vencimentos e não aprova', async () => {
+    await open();
+    await userEvent.click(screen.getByRole('button', { name: 'Calendário e diagonal' }));
+    expect(await screen.findByRole('heading', { name: 'Trava calendário com call' })).toBeTruthy();
+    const call = calls.find((item) => item.path.includes('/calendars'))!;
+    expect(call.url).toContain("near=2026-12-18");
+    expect(call.url).toContain("far=2027-01-15");
+    expect(screen.getByText(/o app não aprova calendário nem diagonal/)).toBeTruthy();
+    const steps = screen.getByText('Montagem passo a passo').parentElement!.nextElementSibling!;
+    expect(steps.textContent).toMatch(/1Compre 100 LONGA \(call, strike R\$\s*50,00, vence/);
+    expect(steps.textContent).toMatch(/Venda 100 CURTA/);
+    expect(steps.textContent).toMatch(/Perna curta/);
+    expect(screen.getByText(/Sem strike|sem strike/)).toBeTruthy();
+  });
+
+  it('o Jarbas acompanha a estrutura selecionada na tela', async () => {
+    await open();
+    await userEvent.click(screen.getByRole('button', { name: 'Abrir o Jarbas IA' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Jarbas IA' });
+    expect(within(dialog).getByText('Compra de call')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: /Compra de put/ }));
+    await waitFor(() => expect(within(dialog).getByText('Compra de put')).toBeTruthy());
   });
 
   it('não oferece nenhum envio de ordem', async () => {

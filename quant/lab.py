@@ -209,9 +209,32 @@ def meets_scan_liquidity(quote: OptionQuote) -> bool:
     return (quote.volume or 0) >= MIN_SCAN_VOLUME and enough_open
 
 
-def vertical_scan(quotes: Sequence[OptionQuote], spot: float, t: float, r: float, lot: int = 100) -> list[Candidate]:
-    """Varre pares de strikes líquidos e fica, em cada um dos 4 tipos de trava, com o de maior
-    valor esperado por real de risco. Só usa dados do pregão recebido."""
+# Família didática de cada lado da varredura: (chave, tipo, quem é comprado).
+VERTICAL_FAMILIES = (
+    ("bull_call_spread", OptionKind.CALL, "low_buy"),
+    ("bear_call_spread", OptionKind.CALL, "high_buy"),
+    ("bull_put_spread", OptionKind.PUT, "low_buy"),
+    ("bear_put_spread", OptionKind.PUT, "high_buy"),
+)
+
+
+@dataclass(frozen=True)
+class RankedVertical:
+    family: str
+    rank: int
+    candidate: Candidate
+    # Valor esperado no vencimento pelo modelo, em R$, e por real de perda máxima.
+    expected_pnl: float
+    expected_return_on_risk: float
+
+
+def vertical_ranking(
+    quotes: Sequence[OptionQuote], spot: float, t: float, r: float, lot: int = 100, top: int = 3
+) -> list[RankedVertical]:
+    """Varre pares de strikes líquidos e devolve, em cada um dos 4 tipos de trava, os `top` pares
+    de maior valor esperado por real de risco. Só usa dados do pregão recebido."""
+    if top < 1:
+        raise ValueError("top precisa ser positivo")
     pool = [
         quote
         for quote in quotes
@@ -220,16 +243,10 @@ def vertical_scan(quotes: Sequence[OptionQuote], spot: float, t: float, r: float
         and meets_scan_liquidity(quote)
         and (quote.trades or 0) >= _SCAN_MIN_TRADES
     ]
-    kinds = (
-        ("varredura_alta_call", "Trava de alta com call (varredura)", OptionKind.CALL, "low_buy", "Melhor par de calls para alta."),
-        ("varredura_baixa_call", "Trava de baixa com call (varredura)", OptionKind.CALL, "high_buy", "Melhor par de calls com crédito."),
-        ("varredura_alta_put", "Trava de alta com put (varredura)", OptionKind.PUT, "low_buy", "Melhor par de puts com crédito."),
-        ("varredura_baixa_put", "Trava de baixa com put (varredura)", OptionKind.PUT, "high_buy", "Melhor par de puts para queda."),
-    )
-    found: list[Candidate] = []
-    for key, name, kind, side, rationale in kinds:
+    ranked: list[RankedVertical] = []
+    for family, kind, side in VERTICAL_FAMILIES:
         series = sorted((quote for quote in pool if quote.kind is kind), key=lambda quote: quote.strike)
-        best, best_score = None, None
+        scored: list[tuple[float, float, Candidate]] = []
         for index, low in enumerate(series):
             for high in series[index + 1 :]:
                 if (high.strike - low.strike) / spot > _SCAN_MAX_WIDTH:
@@ -237,15 +254,32 @@ def vertical_scan(quotes: Sequence[OptionQuote], spot: float, t: float, r: float
                 if abs(low.iv - high.iv) > _SCAN_MAX_IV_GAP:
                     continue
                 buy, sell = (low, high) if side == "low_buy" else (high, low)
-                candidate = _vertical(key, name, buy, sell, lot, rationale)
+                candidate = _vertical(family, family, buy, sell, lot, "")
                 if candidate is None:
                     continue
-                sigma = (buy.iv + sell.iv) / 2
-                score = expected_pnl(candidate.proposal.legs, spot, sigma, t, r) / candidate.proposal.max_loss
-                if best_score is None or score > best_score:
-                    best, best_score = candidate, score
-        if best:
-            found.append(best)
+                expected = expected_pnl(candidate.proposal.legs, spot, (buy.iv + sell.iv) / 2, t, r)
+                scored.append((expected / candidate.proposal.max_loss, expected, candidate))
+        scored.sort(key=lambda item: -item[0])
+        for position, (score, expected, candidate) in enumerate(scored[:top], start=1):
+            ranked.append(RankedVertical(family, position, candidate, expected, score))
+    return ranked
+
+
+_SCAN_LABELS = {
+    "bull_call_spread": ("varredura_alta_call", "Trava de alta com call (varredura)", "Melhor par de calls para alta."),
+    "bear_call_spread": ("varredura_baixa_call", "Trava de baixa com call (varredura)", "Melhor par de calls com crédito."),
+    "bull_put_spread": ("varredura_alta_put", "Trava de alta com put (varredura)", "Melhor par de puts com crédito."),
+    "bear_put_spread": ("varredura_baixa_put", "Trava de baixa com put (varredura)", "Melhor par de puts para queda."),
+}
+
+
+def vertical_scan(quotes: Sequence[OptionQuote], spot: float, t: float, r: float, lot: int = 100) -> list[Candidate]:
+    """O melhor par de cada tipo de trava, com as chaves do laboratório."""
+    found: list[Candidate] = []
+    for item in vertical_ranking(quotes, spot, t, r, lot, top=1):
+        key, name, rationale = _SCAN_LABELS[item.family]
+        proposal = item.candidate.proposal.model_copy(update={"name": name, "rationale": rationale})
+        found.append(Candidate(key=key, proposal=proposal, quotes=item.candidate.quotes, bases=item.candidate.bases))
     return found
 
 

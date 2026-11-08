@@ -220,8 +220,9 @@ class TestData:
 
     def test_strategies_are_calculated_and_sorted(self, client):
         body = client.get(f"/api/assets/PETR4/strategies?expiry={EXPIRY}").json()
-        assert len(body["candidates"]) == 11
-        flags = [row["risk"]["is_approved"] for row in body["candidates"]]
+        base = [row for row in body["candidates"] if row["group"] == "BASE"]
+        assert len(base) == 11
+        flags = [row["risk"]["is_approved"] for row in base]
         assert any(flags) and flags == sorted(flags, reverse=True)
         call = next(row for row in body["candidates"] if row["key"] == "long_call")
         assert call["max_profit"] is None
@@ -235,6 +236,20 @@ class TestData:
         assert any("Resultado Q3/2026" in text for text in call["risk"]["warnings"])
         assert body["events"][0]["label"] == "Resultado Q3/2026"
         assert body["iv_rank"] is not None
+
+    def test_most_profitable_spreads_are_ranked_and_decided(self, client):
+        body = client.get(f"/api/assets/PETR4/strategies?expiry={EXPIRY}").json()
+        ranked = [row for row in body["candidates"] if row["group"] == "RANKING"]
+        assert ranked, "a grade de teste tem séries líquidas para travas"
+        assert {row["family"] for row in ranked} <= {"bull_call_spread", "bear_call_spread", "bull_put_spread", "bear_put_spread"}
+        scores = [row["ranking"]["expected_return_on_risk"] for row in ranked]
+        assert scores == sorted(scores, reverse=True)
+        for row in ranked:
+            assert len(row["legs"]) == 2 and row["max_loss"] > 0 and row["max_profit"] > 0
+            assert row["decision"]["status"] in {"APROVADA", "REPROVADA", "INCOMPLETA"}
+            assert row["ranking"]["max_return_on_risk"] == pytest.approx(row["max_profit"] / row["max_loss"])
+            assert "#" in row["key"]
+        assert len({row["key"] for row in body["candidates"]}) == len(body["candidates"])
 
     def test_profile_is_validated_and_applied(self, client):
         assert client.get(f"/api/assets/PETR4/strategies?expiry={EXPIRY}&profile=OUTRO").status_code == 422

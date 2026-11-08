@@ -5,6 +5,8 @@
 
 import { useEffect, useState } from 'react';
 import { Alerts, alertCount } from './components/Alerts';
+import { AppStatus } from './components/AppStatus';
+import { Jarbas } from './components/Jarbas';
 import { Carteira } from './components/Carteira';
 import { ErrorNotice, Loading } from './components/Common';
 import { Dashboard } from './components/Dashboard';
@@ -67,6 +69,8 @@ function Workspace({ onLogout }: { onLogout: () => void }) {
   return (
     <div className="max-w-[1400px] mx-auto p-4 md:p-8 space-y-6">
       <Masthead activeTab={activeTab} setActiveTab={setActiveTab} alertCount={alertCount(rows)} onLogout={onLogout} />
+      <AppStatus />
+      <Jarbas />
       <main className="space-y-6 min-w-0">
         {scanner.loading && !scanner.data && <Loading label="Consultando a fonte de dados..." />}
         {scanner.error && <ErrorNotice error={scanner.error} onRetry={scanner.reload} />}

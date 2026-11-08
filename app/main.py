@@ -12,13 +12,21 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+import time
+from collections import deque
+
+import httpx
+
 from app import auth, carteira, lab, service
+from app.jarbas import catalog as jarbas_catalog, store as jarbas_store, tools as jarbas_tools
+from app.jarbas.assistant import MAX_MESSAGE_CHARS, StrategyContext, recent_turns, system_prompt
+from app.jarbas.providers import AllProvidersFailed, ChatMessage, ProviderManager, providers_from_env
 from app.cache import CachingProvider
 from core.clock import market_today
 from core.config import load_local_env
 from core.exceptions import DataInsufficientError
 from quant.costs import CostSchedule
-from quant.risk import CapitalLimits
+from quant.risk import CapitalLimits, RiskLimits
 from data.normalizer import is_stock_symbol, normalize_symbol
 from data.providers.base import DataProvider
 from data.providers.brapi import BrapiProvider
@@ -59,6 +67,29 @@ class Settings:
 
 
 CACHE_RETENTION = timedelta(days=7)
+
+
+JARBAS_PER_MINUTE = 20
+
+
+JARBAS_PROVIDERS = ("openrouter", "gemini", "groq", "custom")
+
+
+class JarbasRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
+    conversation_id: str | None = Field(default=None, pattern="^[0-9a-f]{32}$")
+    context: StrategyContext | None = None
+
+
+class JarbasSettingsRequest(BaseModel):
+    provider_order: list[Literal["openrouter", "gemini", "groq", "custom"]] = Field(min_length=1, max_length=4)
+    openrouter_model: str | None = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9._/:-]+$")
+    allow_paid: bool = False
+    daily_limit: int = Field(ge=1, le=2000)
+    retention_days: int = Field(ge=1, le=3650)
+    speak_replies: bool = True
+    voice_name: str | None = Field(default=None, max_length=120)
+    voice_rate: float = Field(ge=0.5, le=2.0)
 
 
 class LoginRequest(BaseModel):
@@ -141,9 +172,14 @@ def create_app(
     provider_factory: Callable[[Database], DataProvider] | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     market_ingest: Callable[[Database, datetime], dict] | None = None,
+    ai_manager: ProviderManager | None = None,
+    ai_transport: httpx.BaseTransport | None = None,
 ) -> FastAPI:
     load_local_env()
     config = settings or Settings.from_env()
+    jarbas = ai_manager or ProviderManager(providers_from_env())
+    # Protege a cota gratuita dos provedores: limite por instância do servidor.
+    jarbas_calls: deque[float] = deque()
     make_database = database_factory or Database.from_env
     make_provider = provider_factory or default_provider
     # Com outra fonte injetada não há arquivo da B3 para guardar.
@@ -424,6 +460,139 @@ def create_app(
         carteira.apply_review(view, carteira.review_candidates(db, view))
         carteira.record_decisions(db, view, moment)
         return view
+
+    @router.get("/assets/{symbol}/calendars", dependencies=protected)
+    def get_calendars(symbol: str, near: date, far: date, source: DataProvider = Depends(provider)) -> dict:
+        return service.calendars_view(source, _valid_symbol(symbol), near, far, now())
+
+    def jarbas_models(client: httpx.Client) -> list[dict]:
+        if not any(p.name == "openrouter" for p in jarbas.providers):
+            return []
+        return jarbas_catalog.list_models(client)
+
+    def jarbas_day() -> str:
+        return now().astimezone(timezone.utc).date().isoformat()
+
+    @router.get("/jarbas/status", dependencies=protected)
+    def jarbas_status(db: Database = Depends(database)) -> dict:
+        settings = jarbas_store.read_settings(db)
+        jarbas.apply(settings["provider_order"])
+        return {
+            "available": bool(jarbas.providers),
+            "providers": jarbas.status(),
+            "usage": {**jarbas_store.usage_on(db, jarbas_day()), "daily_limit": settings["daily_limit"]},
+            "voice": {key: settings[key] for key in ("speak_replies", "voice_name", "voice_rate")},
+        }
+
+    @router.get("/jarbas/settings", dependencies=protected)
+    def jarbas_settings(db: Database = Depends(database)) -> dict:
+        return {**jarbas_store.read_settings(db), "configured_providers": [p.name for p in jarbas.providers]}
+
+    @router.put("/jarbas/settings", dependencies=protected)
+    def save_jarbas_settings(body: JarbasSettingsRequest, db: Database = Depends(database)) -> dict:
+        if len(set(body.provider_order)) != len(body.provider_order):
+            raise HTTPException(422, "Provedor repetido na ordem.")
+        if body.openrouter_model:
+            with httpx.Client(transport=ai_transport) as client:
+                models = jarbas_models(client)
+            if models and not any(model["id"] == body.openrouter_model for model in models):
+                raise HTTPException(422, "Modelo não encontrado no OpenRouter.")
+            if not body.allow_paid and jarbas_catalog.is_paid(body.openrouter_model, models):
+                raise HTTPException(422, "Modelo pago exige autorizar modelos pagos: pode gerar cobrança.")
+        saved = jarbas_store.save_settings(db, body.model_dump(), now())
+        return {**saved, "configured_providers": [p.name for p in jarbas.providers]}
+
+    @router.get("/jarbas/models", dependencies=protected)
+    def get_jarbas_models(db: Database = Depends(database)) -> dict:
+        settings = jarbas_store.read_settings(db)
+        with httpx.Client(transport=ai_transport) as client:
+            models = jarbas_models(client)
+        return {
+            "configured": any(p.name == "openrouter" for p in jarbas.providers),
+            "models": models,
+            "chain": jarbas_catalog.model_chain(settings["openrouter_model"], models, settings["allow_paid"]).split(",") if models else [],
+        }
+
+    @router.get("/jarbas/conversations", dependencies=protected)
+    def jarbas_conversations(db: Database = Depends(database)) -> dict:
+        return {"conversations": jarbas_store.list_conversations(db)}
+
+    @router.get("/jarbas/conversations/{identity}", dependencies=protected)
+    def jarbas_conversation(identity: str, db: Database = Depends(database)) -> dict:
+        found = jarbas_store.get_conversation(db, identity) if len(identity) == 32 else None
+        if not found:
+            raise HTTPException(404, "Conversa não encontrada.")
+        return found
+
+    @router.delete("/jarbas/conversations/{identity}", dependencies=protected)
+    def delete_jarbas_conversation(identity: str, db: Database = Depends(database)) -> dict:
+        if len(identity) != 32 or not jarbas_store.delete_conversation(db, identity):
+            raise HTTPException(404, "Conversa não encontrada.")
+        return {"deleted": True}
+
+    @router.post("/jarbas/chat", dependencies=protected)
+    def jarbas_chat(body: JarbasRequest, db: Database = Depends(database)) -> dict:
+        if not jarbas.providers:
+            raise HTTPException(503, "Nenhum provedor de IA configurado no servidor.")
+        moment = time.monotonic()
+        while jarbas_calls and moment - jarbas_calls[0] > 60:
+            jarbas_calls.popleft()
+        if len(jarbas_calls) >= JARBAS_PER_MINUTE:
+            raise HTTPException(429, "Muitas perguntas seguidas. Aguarde um minuto.")
+        settings = jarbas_store.read_settings(db)
+        day = jarbas_day()
+        if jarbas_store.questions_on(db, day) >= settings["daily_limit"]:
+            raise HTTPException(429, f"Limite diário de {settings['daily_limit']} perguntas atingido. Ajuste nas configurações do Jarbas.")
+        jarbas_calls.append(moment)
+        stamp = now()
+        jarbas_store.purge(db, settings["retention_days"], stamp)
+        question = body.question.strip()
+        conversation = jarbas_store.ensure_conversation(db, body.conversation_id, question, stamp)
+        history = jarbas_store.history_for_model(db, conversation)
+        jarbas_store.add_message(db, conversation, "user", question, stamp, context=body.context.model_dump() if body.context else None)
+        turns = recent_turns([ChatMessage(role, content) for role, content in history] + [ChatMessage("user", question)])
+        data, used = jarbas_tools.gather(
+            question,
+            body.context is not None,
+            body.context.symbol if body.context else None,
+            db,
+            lambda: make_provider(db),
+            watchlist_symbols(db),
+            stamp,
+            RiskLimits().max_spot_drift,
+        )
+        with httpx.Client(transport=ai_transport) as client:
+            chain = jarbas_catalog.model_chain(settings["openrouter_model"], jarbas_models(client), settings["allow_paid"])
+            jarbas.apply(settings["provider_order"], chain or None)
+            try:
+                result = jarbas.complete(system_prompt(body.context, data), turns, client)
+            except AllProvidersFailed as failure:
+                for attempt in failure.attempts:
+                    jarbas_store.record_usage(db, day, attempt.provider, "-", False, None, None)
+                raise HTTPException(
+                    503,
+                    {
+                        "message": "Nenhum provedor de IA respondeu agora. Tente de novo em instantes.",
+                        "attempts": [{"provider": a.provider, "error": a.error} for a in failure.attempts],
+                        "conversation_id": conversation,
+                    },
+                )
+        for attempt in result.attempts[:-1]:
+            jarbas_store.record_usage(db, day, attempt.provider, "-", False, None, None)
+        jarbas_store.record_usage(db, day, result.provider, result.model, True, result.prompt_tokens, result.completion_tokens)
+        jarbas_store.add_message(
+            db, conversation, "assistant", result.text, now(), result.label, result.model,
+            tools=used, prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens, latency_ms=result.latency_ms,
+        )
+        return {
+            "reply": result.text,
+            "provider": result.label,
+            "model": result.model,
+            "attempts": [{"provider": a.provider, "error": a.error} for a in result.attempts],
+            "conversation_id": conversation,
+            "tools": used,
+            "usage": {"questions": jarbas_store.questions_on(db, day), "daily_limit": settings["daily_limit"]},
+        }
 
     @router.get("/portfolio", dependencies=protected)
     def get_portfolio(db: Database = Depends(database)) -> dict:

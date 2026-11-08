@@ -4,9 +4,8 @@
  */
 
 import { type CSSProperties, FormEvent, useEffect, useMemo, useState } from 'react';
-import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, useResource } from '../services/api';
-import { Candidate, ChainQuote, ChainView, DecisionStatus, Profile, StrategiesView } from '../types';
+import { CalendarCandidate, CalendarsView, Candidate, ChainQuote, ChainView, DecisionStatus, Profile, StrategiesView } from '../types';
 import {
   cn,
   formatChange,
@@ -23,16 +22,16 @@ import {
 } from '../lib/utils';
 import { ErrorNotice, Loading, Panel, Signed, Stat } from './Common';
 import { OpenInterestPanel, PnlHeatmap, SkewChart } from './OptionAnalytics';
+import { PayoffMap } from './PayoffMap';
+import { setJarbasContext } from '../lib/jarbasStore';
+import { StrategyGuideCard } from './StrategyGuide';
+import { guideOf, MarketView, VIEW_LABEL, VIEW_QUESTION } from '../lib/strategyGuide';
 
 interface StrategyViewProps {
   symbols: string[];
   symbol: string | null;
   onSymbol: (symbol: string) => void;
 }
-
-const INK = '#191916';
-const PAPER = '#f3efe5';
-const SECONDARY = '#494843';
 
 export function StrategyView({ symbols, symbol, onSymbol }: StrategyViewProps) {
   const expirations = useResource(symbol, () => api.expirations(symbol!));
@@ -53,6 +52,8 @@ export function StrategyView({ symbols, symbol, onSymbol }: StrategyViewProps) {
   const key = symbol && expiry ? `${symbol}:${expiry}` : null;
   const strategies = useResource(key && `${key}:${profile}`, () => api.strategies(symbol!, expiry!, profile));
   const chain = useResource(key, () => api.chain(symbol!, expiry!));
+  // Fora da tela de estratégias, o Jarbas não fala de uma estrutura que não está à vista.
+  useEffect(() => () => setJarbasContext(null), []);
 
   return (
     <div className="space-y-4">
@@ -102,8 +103,15 @@ export function StrategyView({ symbols, symbol, onSymbol }: StrategyViewProps) {
         </div>
       </header>
 
-      <RiskSettingsForm onSaved={strategies.reload} />
-      <CostSettingsForm onSaved={strategies.reload} />
+      <details
+        className="np-section"
+        open={!(strategies.data?.capital_configured && strategies.data?.costs_configured)}
+      >
+        <summary className="cursor-pointer text-xl">Seu capital, limite e custos</summary>
+        <p className="np-note mt-1">Sem esses valores nenhuma estrutura é aprovada. Depois de salvos, esta parte fica recolhida.</p>
+        <RiskSettingsForm onSaved={strategies.reload} />
+        <CostSettingsForm onSaved={strategies.reload} />
+      </details>
 
       {!symbol && <p>Selecione um ativo.</p>}
       {expirations.loading && <Loading label="Buscando vencimentos..." />}
@@ -111,7 +119,7 @@ export function StrategyView({ symbols, symbol, onSymbol }: StrategyViewProps) {
       {symbol && expirations.data && !expiry && <p>A fonte não listou vencimentos futuros para {symbol}.</p>}
       {key && strategies.loading && !strategies.data && <Loading label="Calculando estruturas..." />}
       {strategies.error && <ErrorNotice error={strategies.error} onRetry={strategies.reload} />}
-      {strategies.data && <Analysis view={strategies.data} />}
+      {strategies.data && <Analysis view={strategies.data} expirations={expirations.data?.expirations ?? []} />}
       {chain.data && <OpenInterestPanel summary={chain.data.open_interest} />}
       {chain.data && <SkewChart chain={chain.data} />}
       {chain.data && <ChainTable chain={chain.data} />}
@@ -248,10 +256,26 @@ function DecisionLabel({ status }: { status: DecisionStatus }) {
   );
 }
 
-function Analysis({ view }: { view: StrategiesView }) {
+const VIEWS: MarketView[] = ['ALTA', 'BAIXA', 'LATERAL', 'MOVIMENTO'];
+
+type Section = 'BASE' | 'RANKING' | 'CALENDAR';
+
+const SECTION_LABEL: Record<Section, string> = {
+  BASE: 'Estruturas clássicas',
+  RANKING: 'Travas mais rentáveis',
+  CALENDAR: 'Calendário e diagonal',
+};
+
+function Analysis({ view, expirations }: { view: StrategiesView; expirations: string[] }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const selected = view.candidates.find((item) => item.key === selectedKey) ?? view.candidates[0];
-  const approved = view.candidates.filter((item) => item.decision.status === 'APROVADA').length;
+  const [marketView, setMarketView] = useState<MarketView | null>(null);
+  const [section, setSection] = useState<Section>('BASE');
+  const inView = (item: { key: string; family?: string }) => marketView === null || guideOf(item)?.view === marketView;
+  const base = view.candidates.filter((item) => (item.group ?? 'BASE') === 'BASE');
+  const ranked = view.candidates.filter((item) => item.group === 'RANKING');
+  const shown = (section === 'RANKING' ? ranked : base).filter(inView);
+  const selected = shown.find((item) => item.key === selectedKey) ?? shown[0];
+  const approved = base.filter((item) => item.decision.status === 'APROVADA').length;
   const drifted = view.candidates.length > 0 && view.candidates.every((item) => item.risk.rejection_reason?.includes('defasados'));
 
   return (
@@ -277,11 +301,50 @@ function Analysis({ view }: { view: StrategiesView }) {
         <Stat label="Juros" value={formatRatio(view.risk_free_rate, 2)} hint="Informado pela fonte" />
       </div>
 
+      <div className="np-section">
+        <h3 className="text-xl">O que você espera de {view.symbol} até {formatDay(view.expiry)}?</h3>
+        <p className="np-note mt-1">Escolha uma visão e veja só as estruturas feitas para ela.</p>
+        <div className="flex flex-wrap gap-2 mt-2" role="group" aria-label="Visão de mercado">
+          <button className="np-btn" aria-pressed={marketView === null} onClick={() => setMarketView(null)}>
+            Todas
+          </button>
+          {VIEWS.map((option) => (
+            <button key={option} className="np-btn" aria-pressed={marketView === option} onClick={() => setMarketView(option)} title={VIEW_LABEL[option]}>
+              {VIEW_QUESTION[option]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <nav aria-label="Tipo de estrutura" className="flex flex-wrap gap-2 border-y border-ink py-2">
+        {(Object.keys(SECTION_LABEL) as Section[]).map((option) => (
+          <button key={option} className="np-btn" aria-current={section === option ? 'page' : undefined} onClick={() => setSection(option)}>
+            {SECTION_LABEL[option]}
+            {option === 'RANKING' && ` (${ranked.length})`}
+          </button>
+        ))}
+      </nav>
+
+      {section === 'CALENDAR' ? (
+        <CalendarSection symbol={view.symbol} near={view.expiry} expirations={expirations} inView={inView} />
+      ) : (
       <div className="np-spread-side np-section">
         <aside className="min-w-0">
-          <h3 className="text-xl mb-2">{`Estruturas: ${approved} de ${view.candidates.length} aprovadas`}</h3>
+          {section === 'BASE' ? (
+            <h3 className="text-xl mb-2">{`Estruturas: ${approved} de ${base.length} aprovadas`}</h3>
+          ) : (
+            <>
+              <h3 className="text-xl mb-1">Travas mais rentáveis</h3>
+              <p className="font-display text-xs text-ink-2 mb-2">
+                Todos os pares de strikes com liquidez foram testados. Ficam os 3 melhores de cada tipo pela estimativa média por real
+                de risco, que pesa o ganho junto com a chance de acontecer. Retorno máximo alto quase sempre vem com chance baixa.
+              </p>
+              {ranked.length === 0 && <p className="text-base">Nenhum par de séries passou nos filtros de liquidez desta grade.</p>}
+            </>
+          )}
+          {shown.length === 0 && <p className="text-base">Nenhuma estrutura desta visão pôde ser montada nesta grade.</p>}
           <ul>
-            {view.candidates.map((item) => (
+            {shown.map((item) => (
               <li key={item.key} className="np-rule">
                 <button
                   onClick={() => setSelectedKey(item.key)}
@@ -289,10 +352,23 @@ function Analysis({ view }: { view: StrategiesView }) {
                   className="w-full py-2 px-1 text-left font-display cursor-pointer hover:bg-[#e6e0d2] aria-[current=true]:bg-[#e6e0d2]"
                 >
                   <span className="flex items-start justify-between gap-2">
-                    <span className="font-semibold text-sm">{item.name}</span>
+                    <span className="font-semibold text-sm">
+                      {item.ranking && `${item.ranking.rank}º · `}
+                      {item.name}
+                    </span>
                     <DecisionLabel status={item.decision.status} />
                   </span>
                   <span className="block text-xs text-ink-2 mt-1">
+                    {guideOf(item) && `${VIEW_LABEL[guideOf(item)!.view]} · `}
+                    Chance de lucro {formatRatio(item.probability_of_profit, 0)}
+                  </span>
+                  {item.ranking && (
+                    <span className="block text-xs text-ink-2">
+                      Retorno máx. {item.ranking.max_return_on_risk !== null ? formatRatio(item.ranking.max_return_on_risk, 0) : '—'} do risco ·
+                      Estimativa média {formatCurrency(item.ranking.expected_pnl)} ({formatRatio(item.ranking.expected_return_on_risk, 1)} do risco)
+                    </span>
+                  )}
+                  <span className="block text-xs text-ink-2">
                     Ganho {formatLimit(item.max_profit)} · Perda {formatLimit(item.max_loss)}
                     {item.fits_regime && ' · compatível com o regime'}
                   </span>
@@ -300,7 +376,7 @@ function Analysis({ view }: { view: StrategiesView }) {
               </li>
             ))}
           </ul>
-          {view.unavailable.length > 0 && (
+          {section === 'BASE' && view.unavailable.length > 0 && (
             <div className="mt-3 pt-3 np-rule font-display text-xs text-ink-2 space-y-1">
               <p className="font-semibold">Sem strikes na grade:</p>
               {view.unavailable.map((item) => (
@@ -309,11 +385,177 @@ function Analysis({ view }: { view: StrategiesView }) {
             </div>
           )}
         </aside>
-        <div className="min-w-0">{selected ? <Detail item={selected} spot={view.spot} /> : <p>Nenhuma estrutura pôde ser montada.</p>}</div>
+        <div className="min-w-0">{selected ? <Detail item={selected} view={view} /> : <p>Nenhuma estrutura pôde ser montada.</p>}</div>
       </div>
+      )}
     </div>
   );
 }
+
+function CalendarSection({
+  symbol,
+  near,
+  expirations,
+  inView,
+}: {
+  symbol: string;
+  near: string;
+  expirations: string[];
+  inView: (item: { key: string; family?: string }) => boolean;
+}) {
+  const fars = useMemo(() => expirations.filter((day) => day > near), [expirations, near]);
+  const [far, setFar] = useState<string | null>(fars[0] ?? null);
+  useEffect(() => setFar(fars[0] ?? null), [fars]);
+  const calendars = useResource(far ? `calendars:${symbol}:${near}:${far}` : null, () => api.calendars(symbol, near, far!));
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+
+  if (fars.length === 0) return <p className="np-section">Não há vencimento depois de {formatDay(near)} para montar calendário ou diagonal.</p>;
+  const data = calendars.data;
+  const shown = (data?.candidates ?? []).filter(inView);
+  const selected = shown.find((item) => item.key === selectedKey) ?? shown[0];
+
+  return (
+    <div className="space-y-4">
+      <div className="np-section flex flex-wrap items-end gap-3">
+        <p className="basis-full md:basis-auto md:max-w-md text-base">
+          Vende no vencimento curto (<strong>{formatDay(near)}</strong>, o escolhido acima) e compra no longo. O resultado é medido no dia do
+          vencimento curto.
+        </p>
+        <label className="np-label">
+          Vencimento longo
+          <select value={far ?? ''} onChange={(event) => setFar(event.target.value)} className="np-input block mt-1">
+            {fars.map((day) => (
+              <option key={day} value={day}>
+                {formatDay(day)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {calendars.loading && !data && <Loading label="Montando calendários..." />}
+      {calendars.error && <ErrorNotice error={calendars.error} onRetry={calendars.reload} />}
+      {data && (
+        <div className="np-spread-side np-section">
+          <aside className="min-w-0">
+            <h3 className="text-xl mb-2">Calendário e diagonal</h3>
+            {shown.length === 0 && <p className="text-base">Nenhuma estrutura desta visão pôde ser montada.</p>}
+            <ul>
+              {shown.map((item) => (
+                <li key={item.key} className="np-rule">
+                  <button
+                    onClick={() => setSelectedKey(item.key)}
+                    aria-current={selected?.key === item.key}
+                    className="w-full py-2 px-1 text-left font-display cursor-pointer hover:bg-[#e6e0d2] aria-[current=true]:bg-[#e6e0d2]"
+                  >
+                    <span className="flex items-start justify-between gap-2">
+                      <span className="font-semibold text-sm">{item.name}</span>
+                      <DecisionLabel status={item.decision.status} />
+                    </span>
+                    <span className="block text-xs text-ink-2 mt-1">
+                      Chance de lucro {formatRatio(item.probability_of_profit, 0)} · Débito {formatCurrency(item.net_premium)}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {data.unavailable.length > 0 && (
+              <div className="mt-3 pt-3 np-rule font-display text-xs text-ink-2 space-y-1">
+                <p className="font-semibold">Não montadas:</p>
+                {data.unavailable.map((item) => (
+                  <p key={item.key}>
+                    {item.name}: {item.reason}
+                  </p>
+                ))}
+              </div>
+            )}
+          </aside>
+          <div className="min-w-0">{selected ? <CalendarDetail item={selected} view={data} /> : <p>Nenhuma estrutura pôde ser montada.</p>}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CalendarDetail({ item, view }: { item: CalendarCandidate; view: CalendarsView }) {
+  const credit = item.net_premium < 0;
+  useEffect(() => {
+    setJarbasContext({
+      symbol: view.symbol,
+      structure_key: item.family,
+      structure_name: item.name,
+      section: 'CALENDAR',
+      market_date: view.market_date,
+      spot: view.spot,
+      expiry: view.near,
+      business_days_to_expiry: view.business_days_to_near,
+      net_premium: item.net_premium,
+      max_profit: item.max_profit,
+      max_loss: item.max_loss,
+      max_profit_is_estimate: true,
+      breakevens: item.breakevens.slice(0, 6),
+      probability_of_profit: item.probability_of_profit,
+      expected_pnl: item.expected_pnl,
+      decision_status: item.decision.status,
+      decision_reasons: item.decision.reasons,
+      decision_missing: item.decision.missing,
+      warnings: [...item.warnings, ...item.assumptions].slice(0, 16),
+      legs: item.legs.map((leg) => ({
+        symbol: leg.symbol, action: leg.action, kind: leg.kind, strike: leg.strike, quantity: leg.quantity,
+        premium: leg.premium, expiry: leg.expiry, iv: leg.iv, delta: leg.delta, style: leg.style,
+      })),
+    });
+  }, [item, view]);
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="flex flex-wrap items-center gap-3">
+          <h3 className="text-3xl">{item.name}</h3>
+          <DecisionLabel status={item.decision.status} />
+        </div>
+        <p className="mt-1">{item.rationale}</p>
+        <div className="mt-2 text-base">
+          <p className="np-label">Por que não é aprovada</p>
+          <ul className="list-disc pl-5">
+            {item.decision.missing.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <div className="np-facts np-rule" style={{ '--np-columns': 4 } as CSSProperties}>
+        <Stat label={credit ? 'Crédito' : 'Débito'} value={formatCurrency(Math.abs(item.net_premium))} hint="Na montagem" />
+        <Stat label="Perda máxima" value={formatCurrency(item.max_loss)} hint="No vencimento curto, pelo modelo" />
+        <Stat label="Ganho máx. estimado" value={formatLimit(item.max_profit)} hint="Depende da vol da perna longa" />
+        <Stat label="Faltam" value={`${view.business_days_to_near} pregões`} hint={`Até o vencimento curto, ${formatDay(view.near)}`} />
+      </div>
+
+      <StrategyGuideCard item={item} />
+
+      <PayoffMap
+        symbol={view.symbol}
+        legs={item.legs}
+        spot={view.spot}
+        t={view.t_near}
+        r={view.risk_free_rate}
+        atmIv={null}
+        maxProfit={item.max_profit}
+        maxLoss={item.max_loss}
+        breakevens={item.breakevens}
+      />
+
+      {(item.warnings.length > 0 || item.assumptions.length > 0) && (
+        <Panel title="Avisos e premissas">
+          <ul className="list-disc pl-5 text-base space-y-1">
+            {[...item.warnings, ...item.assumptions].map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
 
 function MarketContext({ view }: { view: StrategiesView }) {
   const lastBreak = view.structure?.events.at(-1);
@@ -352,8 +594,38 @@ function MarketContext({ view }: { view: StrategiesView }) {
   );
 }
 
-function Detail({ item, spot }: { item: Candidate; spot: number }) {
+function Detail({ item, view }: { item: Candidate; view: StrategiesView }) {
   const decision = item.decision;
+  useEffect(() => {
+    setJarbasContext({
+      symbol: view.symbol,
+      structure_key: item.family ?? item.key,
+      structure_name: item.name,
+      section: item.group ?? 'BASE',
+      market_date: view.market_date,
+      spot: view.spot,
+      live_price: view.live_price,
+      spot_drift: view.spot_drift,
+      expiry: view.expiry,
+      business_days_to_expiry: view.business_days_to_expiry,
+      net_premium: item.net_premium,
+      max_profit: item.max_profit,
+      max_loss: item.max_loss,
+      breakevens: item.breakevens.slice(0, 6),
+      probability_of_profit: item.probability_of_profit,
+      expected_pnl: item.ranking?.expected_pnl ?? null,
+      costs_brl: decision.costs_brl ?? null,
+      decision_status: decision.status,
+      decision_reasons: decision.reasons.slice(0, 12),
+      decision_missing: decision.missing.slice(0, 12),
+      warnings: [...item.risk.warnings, ...item.assumptions].slice(0, 16),
+      atm_iv: view.atm_iv,
+      legs: item.legs.map((leg) => ({
+        symbol: leg.symbol, action: leg.action, kind: leg.kind, strike: leg.strike, quantity: leg.quantity,
+        premium: leg.premium, iv: leg.iv, delta: leg.delta, style: leg.style,
+      })),
+    });
+  }, [item, view]);
   return (
     <div className="space-y-4">
       <div>
@@ -407,46 +679,24 @@ function Detail({ item, spot }: { item: Candidate; spot: number }) {
         <Stat label="Risco / retorno" value={item.risk_reward !== null ? `1 : ${formatNumber(item.risk_reward)}` : 'Sem limite definido'} />
       </div>
 
-      <Panel title="Resultado no vencimento (R$)">
-        <div className="h-[280px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={item.payoff} margin={{ top: 16, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke="#d9d4c8" vertical={false} />
-              <XAxis
-                dataKey="price"
-                type="number"
-                domain={['dataMin', 'dataMax']}
-                stroke={SECONDARY}
-                fontSize={12}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={(value: number) => value.toFixed(0)}
-              />
-              <YAxis stroke={SECONDARY} fontSize={12} tickLine={false} axisLine={false} width={56} />
-              <ReferenceLine y={0} stroke={SECONDARY} />
-              <ReferenceLine
-                x={spot}
-                stroke={SECONDARY}
-                strokeDasharray="4 4"
-                label={{ value: 'Ativo na grade', fill: SECONDARY, fontSize: 11, position: 'top' }}
-              />
-              <Tooltip
-                contentStyle={{ backgroundColor: PAPER, border: `1px solid ${INK}`, borderRadius: 0 }}
-                labelStyle={{ color: SECONDARY }}
-                itemStyle={{ color: INK }}
-                labelFormatter={(price) => `Ativo a ${formatCurrency(Number(price))}`}
-                formatter={(value) => [formatCurrency(Number(value)), 'Resultado']}
-              />
-              <Line type="linear" dataKey="pnl" stroke={INK} strokeWidth={2} dot={false} isAnimationActive={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-        <p className="font-display text-xs text-ink-2 mt-2">
-          Breakeven: {item.breakevens.length ? item.breakevens.map((value) => formatCurrency(value)).join(' e ') : 'nenhum'} · Liquidez:{' '}
-          {formatNumber(item.risk.liquidity_score)} de 1,00
-        </p>
-      </Panel>
+      <StrategyGuideCard item={item} />
 
+      <PayoffMap
+        symbol={view.symbol}
+        legs={item.legs}
+        spot={view.spot}
+        t={view.time_to_expiry_years}
+        r={view.risk_free_rate}
+        atmIv={view.atm_iv}
+        maxProfit={item.max_profit}
+        maxLoss={item.max_loss}
+        breakevens={item.breakevens}
+      />
+
+      <details className="np-section">
+        <summary className="cursor-pointer text-xl">Detalhes técnicos: pernas, gregas, estresse e mapa de calor</summary>
+        <p className="font-display text-xs text-ink-2 mt-1">Liquidez: {formatNumber(item.risk.liquidity_score)} de 1,00</p>
+        <div className="space-y-4 mt-3">
       {item.heatmap && <PnlHeatmap heatmap={item.heatmap} />}
 
       <Panel title="Pernas" className="overflow-x-auto">
@@ -520,6 +770,8 @@ function Detail({ item, spot }: { item: Candidate; spot: number }) {
           </ul>
         </Panel>
       )}
+        </div>
+      </details>
     </div>
   );
 }

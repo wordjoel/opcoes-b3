@@ -25,7 +25,9 @@ from quant.probability import probability_itm
 from quant.regime import classify_regime
 from quant.risk import CapitalLimits, RiskLimits, assess_risk, decide, pnl_heatmap, position_pop
 from quant.structure import analyze_structure
-from quant.strategies import CHEAP_IV_RATIO, RICH_IV_RATIO, build_candidates, fits_regime
+from quant.calendar_spreads import analyze_calendar, build_calendars
+from quant.lab import vertical_ranking
+from quant.strategies import CHEAP_IV_RATIO, RICH_IV_RATIO, STRUCTURES, build_candidates, fits_regime
 from quant.volatility import bollinger_bands, ewma_volatility, historical_volatility, rolling_volatility
 
 # Vencimento de referência do scanner: evita o gama dos últimos dias.
@@ -43,6 +45,11 @@ _SOON_EVENT_DAYS = 7
 # Abaixo do limite de 60 s da função: cada chamada à fonte leva até 20 s (duas tentativas).
 _SCAN_BUDGET_SECONDS = 35.0
 _TIMED_OUT = "Varredura: tempo esgotado antes de analisar este ativo"
+
+
+# Travas mais rentáveis mostradas por tipo.
+RANKING_TOP = 3
+STRUCTURE_NAMES = {structure.key: structure.name for structure in STRUCTURES}
 
 
 def data_status(price: float | None, market_time: str | None, missing: list[str], now: datetime) -> str:
@@ -281,57 +288,60 @@ def strategies_view(
     rank_row: dict = {"missing": [], "iv_rank": None, "iv_percentile": None, "iv_samples": 0}
     if chain.market_date:
         _fill_iv_rank(provider, symbol, chain.market_date, rank_row)
-    rows = []
-    for candidate in candidates:
+    def row_of(candidate, extra: dict) -> dict:
         proposal = candidate.proposal
         ivs = [quote.iv for quote in candidate.quotes]
         risk = assess_risk(
             proposal, candidate.quotes, spot, t, r, drift, limits, use_book, events=events, today=now.date()
         )
         greeks = position_greeks(proposal.legs, ivs, spot, t, r)
-        rows.append(
-            {
-                "key": candidate.key,
-                "name": proposal.name,
-                "rationale": proposal.rationale,
-                "assumptions": proposal.assumptions,
-                "fits_regime": fits_regime(candidate.key, regime, iv_ratio),
-                "net_premium": net_premium(proposal.legs),
-                "max_profit": proposal.max_profit,
-                "max_loss": proposal.max_loss,
-                "breakevens": proposal.breakeven_points,
-                "risk_reward": proposal.risk_reward_ratio,
-                "probability_of_profit": position_pop(proposal.legs, ivs, spot, t, r),
-                "greeks": greeks.__dict__ if greeks else None,
-                "legs": [
-                    {
-                        "symbol": leg.symbol,
-                        "action": leg.action.value,
-                        "kind": leg.kind.value,
-                        "strike": leg.strike,
-                        "quantity": leg.quantity,
-                        "premium": leg.premium,
-                        "price_basis": basis.value,
-                        "iv": quote.iv,
-                        "delta": quote.delta,
-                        "style": quote.style.value if quote.style else None,
-                        "probability_itm": probability_itm(leg.kind, spot, leg.strike, t, r, quote.iv),
-                    }
-                    for leg, basis, quote in zip(proposal.legs, candidate.bases, candidate.quotes)
-                ],
-                "risk": {
-                    "is_approved": risk.is_approved,
-                    "liquidity_score": risk.liquidity_score,
-                    "stress": risk.stress_test_results,
-                    "warnings": risk.warnings,
-                    "verdict": risk.final_verdict,
-                    "rejection_reason": risk.rejection_reason,
-                },
-                "payoff": [{"price": price, "pnl": pnl} for price, pnl in payoff_curve(proposal.legs, spot)],
-                "heatmap": pnl_heatmap(proposal.legs, ivs, spot, t, r, [quote.style for quote in candidate.quotes]),
-                "decision": decide(proposal, risk, capital, drift, costs),
-            }
-        )
+        return {
+            "key": candidate.key,
+            "name": proposal.name,
+            "rationale": proposal.rationale,
+            "assumptions": proposal.assumptions,
+            "fits_regime": fits_regime(extra.get("family", candidate.key), regime, iv_ratio),
+            "net_premium": net_premium(proposal.legs),
+            "max_profit": proposal.max_profit,
+            "max_loss": proposal.max_loss,
+            "breakevens": proposal.breakeven_points,
+            "risk_reward": proposal.risk_reward_ratio,
+            "probability_of_profit": position_pop(proposal.legs, ivs, spot, t, r),
+            "greeks": greeks.__dict__ if greeks else None,
+            "legs": [
+                {
+                    "symbol": leg.symbol,
+                    "action": leg.action.value,
+                    "kind": leg.kind.value,
+                    "strike": leg.strike,
+                    "quantity": leg.quantity,
+                    "premium": leg.premium,
+                    "price_basis": basis.value,
+                    "iv": quote.iv,
+                    "delta": quote.delta,
+                    "style": quote.style.value if quote.style else None,
+                    "probability_itm": probability_itm(leg.kind, spot, leg.strike, t, r, quote.iv),
+                }
+                for leg, basis, quote in zip(proposal.legs, candidate.bases, candidate.quotes)
+            ],
+            "risk": {
+                "is_approved": risk.is_approved,
+                "liquidity_score": risk.liquidity_score,
+                "stress": risk.stress_test_results,
+                "warnings": risk.warnings,
+                "verdict": risk.final_verdict,
+                "rejection_reason": risk.rejection_reason,
+            },
+            "payoff": [{"price": price, "pnl": pnl} for price, pnl in payoff_curve(proposal.legs, spot)],
+            "heatmap": pnl_heatmap(proposal.legs, ivs, spot, t, r, [quote.style for quote in candidate.quotes]),
+            "decision": decide(proposal, risk, capital, drift, costs),
+            "group": "BASE",
+            "family": candidate.key,
+            "ranking": None,
+            **extra,
+        }
+
+    rows = [row_of(candidate, {}) for candidate in candidates]
     rows.sort(
         key=lambda row: (
             not row["risk"]["is_approved"],
@@ -339,6 +349,45 @@ def strategies_view(
             -(row["risk_reward"] or 0),
         )
     )
+    # Travas mais rentáveis: varredura de pares de strikes líquidos, pela estimativa média por real de risco.
+    ranked_rows = []
+    for item in vertical_ranking(report.usable_quotes, spot, t, r, top=RANKING_TOP):
+        proposal = item.candidate.proposal
+        low, high = sorted(leg.strike for leg in proposal.legs)
+        base_name = STRUCTURE_NAMES[item.family]
+        renamed = item.candidate.__class__(
+            key=f"{item.family}#{item.rank}",
+            proposal=proposal.model_copy(
+                update={
+                    "name": f"{base_name} {decimal_comma(f'{low:g}')}/{decimal_comma(f'{high:g}')}",
+                    "rationale": f"{item.rank}º par deste tipo com a maior estimativa média por real de risco entre as séries líquidas da grade.",
+                    "assumptions": [
+                        "Resultado no vencimento, sem corretagem, emolumentos e impostos.",
+                        *proposal.assumptions,
+                        "Estimativa média pelo modelo lognormal com a vol das pernas: não é previsão.",
+                    ],
+                }
+            ),
+            quotes=item.candidate.quotes,
+            bases=item.candidate.bases,
+        )
+        ranked_rows.append(
+            row_of(
+                renamed,
+                {
+                    "group": "RANKING",
+                    "family": item.family,
+                    "ranking": {
+                        "rank": item.rank,
+                        "expected_pnl": item.expected_pnl,
+                        "expected_return_on_risk": item.expected_return_on_risk,
+                        "max_return_on_risk": (proposal.max_profit / proposal.max_loss) if proposal.max_loss else None,
+                    },
+                },
+            )
+        )
+    ranked_rows.sort(key=lambda row: -row["ranking"]["expected_return_on_risk"])
+    rows.extend(ranked_rows)
     return {
         "symbol": symbol,
         "expiry": expiry.isoformat(),
@@ -367,6 +416,93 @@ def strategies_view(
         "quality": _report(report),
         "candidates": rows,
         "unavailable": [item.__dict__ for item in unavailable],
+    }
+
+
+CALENDAR_MISSING = (
+    "resultado depende da vol futura da perna longa: o app não aprova calendário nem diagonal"
+)
+
+
+def calendars_view(provider: DataProvider, symbol: str, near: date, far: date, now: datetime) -> dict:
+    """Calendário e diagonal entre dois vencimentos. Nunca aprovadas: o ganho depende da vol futura."""
+    if far <= near:
+        raise DataInsufficientError("O vencimento longo precisa ser depois do curto")
+    near_chain, near_report = _load_chain(provider, symbol, near, now)
+    far_chain, far_report = _load_chain(provider, symbol, far, now)
+    if near_chain.market_date != far_chain.market_date:
+        raise DataInsufficientError(f"{symbol}: as grades dos dois vencimentos são de pregões diferentes")
+    times = (near_chain.time_to_expiry_years, far_chain.time_to_expiry_years)
+    if near_chain.risk_free_rate is None or None in times:
+        raise DataInsufficientError(f"{symbol}: a fonte não informou taxa de juros e prazo das grades")
+    t_near, t_far = times
+    if t_far <= t_near:
+        raise DataInsufficientError(f"{symbol}: os prazos informados não separam os dois vencimentos")
+    spot, r = near_chain.underlying.price, near_chain.risk_free_rate
+    built, missing = build_calendars(near_report.usable_quotes, far_report.usable_quotes, spot, t_near, t_far)
+
+    rows = []
+    for candidate in built:
+        analysis = analyze_calendar(candidate, spot, r)
+        styles = {item.quote.style for item in candidate.legs}
+        warnings = []
+        if candidate.short.quote.style is not None and candidate.short.quote.style.value == "AMERICAN":
+            warnings.append("A perna vendida é americana: pode ser exercida antes, e a perda passaria do débito.")
+        if None in styles:
+            warnings.append("A fonte não informou o estilo de alguma perna.")
+        rows.append(
+            {
+                "key": candidate.key,
+                "family": candidate.key,
+                "name": candidate.name,
+                "rationale": candidate.rationale,
+                "net_premium": analysis.net_premium,
+                "max_profit": analysis.max_profit_estimate,
+                "max_loss": analysis.max_loss,
+                "breakevens": list(analysis.breakevens),
+                "probability_of_profit": analysis.probability_of_profit,
+                "expected_pnl": analysis.expected_pnl,
+                "payoff": [{"price": price, "pnl": pnl} for price, pnl in analysis.curve],
+                "legs": [
+                    {
+                        "symbol": item.leg.symbol,
+                        "action": item.leg.action.value,
+                        "kind": item.leg.kind.value,
+                        "strike": item.leg.strike,
+                        "expiry": item.leg.expiry.isoformat(),
+                        "t": item.t,
+                        "quantity": item.leg.quantity,
+                        "premium": item.leg.premium,
+                        "price_basis": item.basis.value,
+                        "iv": item.quote.iv,
+                        "delta": item.quote.delta,
+                        "style": item.quote.style.value if item.quote.style else None,
+                    }
+                    for item in candidate.legs
+                ],
+                "warnings": warnings,
+                "assumptions": [
+                    "Resultado no vencimento curto, sem corretagem, emolumentos e impostos.",
+                    "A perna longa é avaliada por Black-Scholes com a vol implícita de hoje; ganho máximo é estimativa.",
+                    "Prêmios pelo fechamento do pregão: indicativos, sem garantia de execução.",
+                ],
+                "decision": {"status": "INCOMPLETA", "reasons": [], "missing": [CALENDAR_MISSING]},
+            }
+        )
+    rows.sort(key=lambda row: -(row["expected_pnl"] / row["max_loss"] if row["max_loss"] else 0))
+    return {
+        "symbol": symbol,
+        "near": near.isoformat(),
+        "far": far.isoformat(),
+        "market_date": near_chain.market_date.isoformat() if near_chain.market_date else None,
+        "spot": spot,
+        "risk_free_rate": r,
+        "t_near": t_near,
+        "t_far": t_far,
+        "business_days_to_near": trading_days_between(near_chain.market_date or market_today(now), near),
+        "source": near_chain.underlying.provenance.source,
+        "candidates": rows,
+        "unavailable": [{"key": key, "name": name, "reason": reason} for key, name, reason in missing],
     }
 
 
