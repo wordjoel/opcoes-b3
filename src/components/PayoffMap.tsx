@@ -1,3 +1,4 @@
+import { PALETA } from '../lib/tema';
 import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { expiryPnl, isMultiExpiry, modelSigma, numericStats, outcomeStats, PayoffLeg, pnlAfter, priceDensity, priceGrid, probabilityAbove } from '../lib/payoff';
@@ -5,13 +6,6 @@ import { formatCurrency, formatLimit, formatNumber, formatRatio } from '../lib/u
 import { assemblyOrder, useJarbasState } from '../lib/jarbasStore';
 import { Panel, Signed, Stat } from './Common';
 
-const INK = '#191916';
-const PAPER = '#f3efe5';
-const SECONDARY = '#494843';
-const RULE = '#d9d4c8';
-const GAIN = '#2f6b3a';
-const LOSS = '#a3231d';
-const FOCUS = '#1f4e8c';
 
 interface PayoffMapProps {
   symbol: string;
@@ -95,8 +89,8 @@ export function PayoffMap({ symbol, legs, spot, t, r, atmIv, maxProfit, maxLoss,
   return (
     <Panel title="Mapa de resultado">
       <p className="np-note mb-3">
-        Arraste os controles ou toque no gráfico. A área <strong style={{ color: GAIN }}>verde</strong> é onde a estrutura ganha {horizonLabel}, a{' '}
-        <strong style={{ color: LOSS }}>vermelha</strong> onde perde. A linha tracejada mostra o resultado se você desfizer a posição antes, e a
+        Arraste os controles ou toque no gráfico. A área <strong style={{ color: PALETA.GAIN }}>verde</strong> é onde a estrutura ganha {horizonLabel}, a{' '}
+        <strong style={{ color: PALETA.LOSS }}>vermelha</strong> onde perde. A linha tracejada mostra o resultado se você desfizer a posição antes, e a
         sombra cinza indica onde o preço tem mais chance de terminar.
       </p>
 
@@ -126,7 +120,7 @@ export function PayoffMap({ symbol, legs, spot, t, r, atmIv, maxProfit, maxLoss,
       {!stats && <p className="text-accent text-base mb-3">DADOS INSUFICIENTES: sem volatilidade para calcular as probabilidades.</p>}
 
       {focused && (
-        <p role="status" className="mb-2 border-l-4 pl-2 text-base" style={{ borderColor: FOCUS }}>
+        <p role="status" className="mb-2 border-l-4 pl-2 text-base" style={{ borderColor: PALETA.FOCUS }}>
           Passo {highlight! + 1} de {ordered.length}: <strong>{focused.action === 'BUY' ? 'compre' : 'venda'}</strong>{' '}
           {formatNumber(focused.quantity, 0)} {focused.kind === 'CALL' ? 'call' : 'put'} de strike {formatCurrency(focused.strike)} a{' '}
           {formatCurrency(focused.premium)}.
@@ -146,23 +140,23 @@ export function PayoffMap({ symbol, legs, spot, t, r, atmIv, maxProfit, maxLoss,
               if (Number.isFinite(label)) setTarget(label);
             }}
           >
-            <CartesianGrid stroke={RULE} vertical={false} />
+            <CartesianGrid stroke={PALETA.RULE} vertical={false} />
             <XAxis
               dataKey="price"
               type="number"
               domain={[low, high]}
-              stroke={SECONDARY}
+              stroke={PALETA.SECONDARY}
               fontSize={12}
               tickLine={false}
               axisLine={false}
               tickFormatter={(value: number) => value.toFixed(value < 20 ? 1 : 0)}
             />
-            <YAxis yAxisId="pnl" stroke={SECONDARY} fontSize={12} tickLine={false} axisLine={false} width={60} />
+            <YAxis yAxisId="pnl" stroke={PALETA.SECONDARY} fontSize={12} tickLine={false} axisLine={false} width={60} />
             <YAxis yAxisId="density" hide domain={[0, 'dataMax']} />
-            <Area yAxisId="density" type="monotone" dataKey="density" stroke="none" fill={SECONDARY} fillOpacity={0.12} isAnimationActive={false} />
-            <Area yAxisId="pnl" type="linear" dataKey="gain" stroke="none" fill={GAIN} fillOpacity={0.22} isAnimationActive={false} />
-            <Area yAxisId="pnl" type="linear" dataKey="loss" stroke="none" fill={LOSS} fillOpacity={0.18} isAnimationActive={false} />
-            <ReferenceLine yAxisId="pnl" y={0} stroke={SECONDARY} />
+            <Area yAxisId="density" type="monotone" dataKey="density" stroke="none" fill={PALETA.SECONDARY} fillOpacity={0.12} isAnimationActive={false} />
+            <Area yAxisId="pnl" type="linear" dataKey="gain" stroke="none" fill={PALETA.GAIN} fillOpacity={0.22} isAnimationActive={false} />
+            <Area yAxisId="pnl" type="linear" dataKey="loss" stroke="none" fill={PALETA.LOSS} fillOpacity={0.18} isAnimationActive={false} />
+            <ReferenceLine yAxisId="pnl" y={0} stroke={PALETA.SECONDARY} />
             {[...strikeSteps.entries()].map(([strike, steps]) => {
               const active = focused?.strike === strike;
               return (
@@ -170,25 +164,25 @@ export function PayoffMap({ symbol, legs, spot, t, r, atmIv, maxProfit, maxLoss,
                   key={strike}
                   yAxisId="pnl"
                   x={strike}
-                  stroke={active ? FOCUS : RULE}
+                  stroke={active ? PALETA.FOCUS : PALETA.RULE}
                   strokeWidth={active ? 3 : 1}
-                  label={{ value: `${steps.join('·')} | ${formatNumber(strike)}`, fill: active ? FOCUS : SECONDARY, fontSize: active ? 12 : 10, position: 'insideBottom' }}
+                  label={{ value: `${steps.join('·')} | ${formatNumber(strike)}`, fill: active ? PALETA.FOCUS : PALETA.SECONDARY, fontSize: active ? 12 : 10, position: 'insideBottom' }}
                 />
               );
             })}
             {breakevens.map((value) => (
-              <ReferenceLine key={value} yAxisId="pnl" x={value} stroke={SECONDARY} strokeDasharray="2 3" />
+              <ReferenceLine key={value} yAxisId="pnl" x={value} stroke={PALETA.SECONDARY} strokeDasharray="2 3" />
             ))}
-            <ReferenceLine yAxisId="pnl" x={spot} stroke={SECONDARY} strokeDasharray="4 4" label={{ value: 'Hoje', fill: SECONDARY, fontSize: 11, position: 'top' }} />
-            <ReferenceLine yAxisId="pnl" x={clampedTarget} stroke={atTarget >= 0 ? GAIN : LOSS} strokeWidth={2} />
-            <Line yAxisId="pnl" type="linear" dataKey="expiry" stroke={INK} strokeWidth={2} dot={false} isAnimationActive={false} />
+            <ReferenceLine yAxisId="pnl" x={spot} stroke={PALETA.SECONDARY} strokeDasharray="4 4" label={{ value: 'Hoje', fill: PALETA.SECONDARY, fontSize: 11, position: 'top' }} />
+            <ReferenceLine yAxisId="pnl" x={clampedTarget} stroke={atTarget >= 0 ? PALETA.GAIN : PALETA.LOSS} strokeWidth={2} />
+            <Line yAxisId="pnl" type="linear" dataKey="expiry" stroke={PALETA.INK} strokeWidth={2} dot={false} isAnimationActive={false} />
             {daysLeft > 0 && (
-              <Line yAxisId="pnl" type="monotone" dataKey="simulated" stroke={SECONDARY} strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
+              <Line yAxisId="pnl" type="monotone" dataKey="simulated" stroke={PALETA.SECONDARY} strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
             )}
             <Tooltip
-              contentStyle={{ backgroundColor: PAPER, border: `1px solid ${INK}`, borderRadius: 0 }}
-              labelStyle={{ color: SECONDARY }}
-              itemStyle={{ color: INK }}
+              contentStyle={{ backgroundColor: PALETA.PAPER, border: `1px solid ${PALETA.INK}`, borderRadius: 0 }}
+              labelStyle={{ color: PALETA.SECONDARY }}
+              itemStyle={{ color: PALETA.INK }}
               labelFormatter={(price) => `${symbol} a ${formatCurrency(Number(price))}`}
               formatter={(value, name) => {
                 if (name === 'expiry') return [formatCurrency(Number(value)), horizonLabel[0].toUpperCase() + horizonLabel.slice(1)];

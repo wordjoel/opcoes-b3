@@ -2,6 +2,7 @@ import { CSSProperties, FormEvent, useEffect, useState } from 'react';
 import { api, ApiError, useResource } from '../services/api';
 import { DecisionEntry, PortfolioView } from '../types';
 import { formatCurrency, formatDay, formatMoment, formatNumber, saoPauloDate } from '../lib/utils';
+import { paraCampo, parseNumeroBR } from '../lib/numero';
 import { ErrorNotice, Loading, Panel, Signed, Stat } from './Common';
 
 type Section = 'carteira' | 'decisoes';
@@ -125,15 +126,21 @@ function Positions() {
 }
 
 function SettingsForm({ view, onSaved }: { view: PortfolioView; onSaved: (view: PortfolioView) => void }) {
-  const [cash, setCash] = useState(view.settings ? String(view.settings.initial_cash_brl) : '');
-  const [limit, setLimit] = useState(view.settings ? String(view.settings.max_position_size) : '');
+  const [cash, setCash] = useState(view.settings ? paraCampo(view.settings.initial_cash_brl) : '');
+  const [limit, setLimit] = useState(view.settings ? paraCampo(view.settings.max_position_size) : '');
   const [failure, setFailure] = useState<string | null>(null);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setFailure(null);
+    const caixa = parseNumeroBR(cash);
+    const maximo = parseNumeroBR(limit);
+    if (!caixa.ok || !maximo.ok) {
+      setFailure(!caixa.ok ? `Caixa: ${caixa.reason}` : `Máximo por série: ${(maximo as { reason: string }).reason}`);
+      return;
+    }
     try {
-      onSaved(await api.savePortfolioSettings(Number(cash), Number(limit)));
+      onSaved(await api.savePortfolioSettings(caixa.value, maximo.value));
     } catch (error) {
       setFailure((error as ApiError).status === 422 ? 'Caixa a partir de zero e limite inteiro positivo.' : (error as ApiError).message);
     }
@@ -151,11 +158,11 @@ function SettingsForm({ view, onSaved }: { view: PortfolioView; onSaved: (view: 
       </div>
       <label className="np-label">
         Caixa inicial (R$)
-        <input type="number" min="0" step="0.01" required value={cash} onChange={(event) => setCash(event.target.value)} className="np-input block mt-1 w-40" />
+        <input type="text" inputMode="decimal" required value={cash} onChange={(event) => setCash(event.target.value)} placeholder="ex.: 10.000,00" className="np-input block mt-1 w-40" />
       </label>
       <label className="np-label">
         Máximo por série (opções)
-        <input type="number" min="1" step="1" required value={limit} onChange={(event) => setLimit(event.target.value)} className="np-input block mt-1 w-40" />
+        <input type="text" inputMode="numeric" required value={limit} onChange={(event) => setLimit(event.target.value)} placeholder="ex.: 5" className="np-input block mt-1 w-40" />
       </label>
       <button type="submit" className="np-btn" aria-label="Salvar carteira">
         Salvar
@@ -177,10 +184,16 @@ function FillForm({ onSaved }: { onSaved: (view: PortfolioView) => void }) {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setFailure(null);
+    const qtd = parseNumeroBR(quantity);
+    const preco = parseNumeroBR(price);
+    const custo = fees.trim() === '' ? { ok: true as const, value: 0 } : parseNumeroBR(fees);
+    if (!qtd.ok || !preco.ok || !custo.ok) {
+      const motivo = !qtd.ok ? `Quantidade: ${qtd.reason}` : !preco.ok ? `Preço: ${preco.reason}` : `Custos: ${(custo as { reason: string }).reason}`;
+      setFailure(motivo);
+      return;
+    }
     try {
-      onSaved(
-        await api.addFill({ symbol, side, quantity: Number(quantity), price: Number(price), fees_brl: fees ? Number(fees) : 0, trade_day: day }),
-      );
+      onSaved(await api.addFill({ symbol, side, quantity: qtd.value, price: preco.value, fees_brl: custo.value, trade_day: day }));
       setSymbol('');
       setQuantity('');
       setPrice('');
@@ -206,15 +219,15 @@ function FillForm({ onSaved }: { onSaved: (view: PortfolioView) => void }) {
       </label>
       <label className="np-label">
         Quantidade
-        <input type="number" min="1" step="1" required value={quantity} onChange={(event) => setQuantity(event.target.value)} className="np-input block mt-1 w-28" />
+        <input type="text" inputMode="numeric" required value={quantity} onChange={(event) => setQuantity(event.target.value)} placeholder="ex.: 100" className="np-input block mt-1 w-28" />
       </label>
       <label className="np-label">
         Preço (R$)
-        <input type="number" min="0" step="0.01" required value={price} onChange={(event) => setPrice(event.target.value)} className="np-input block mt-1 w-28" />
+        <input type="text" inputMode="decimal" required value={price} onChange={(event) => setPrice(event.target.value)} placeholder="ex.: 0,35" className="np-input block mt-1 w-28" />
       </label>
       <label className="np-label">
         Custos (R$)
-        <input type="number" min="0" step="0.01" value={fees} onChange={(event) => setFees(event.target.value)} className="np-input block mt-1 w-24" />
+        <input type="text" inputMode="decimal" value={fees} onChange={(event) => setFees(event.target.value)} placeholder="ex.: 4,90" className="np-input block mt-1 w-24" />
       </label>
       <label className="np-label">
         Data

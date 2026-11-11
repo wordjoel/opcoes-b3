@@ -44,9 +44,9 @@ function writeKey(key: string, value: string | null) {
 function JarbasAvatar({ active, activity = 'idle' }: { active: boolean; activity?: Activity }) {
   return (
     <svg viewBox="0 0 40 40" className={cn('w-9 h-9 shrink-0', activity !== 'idle' && 'animate-pulse')} aria-hidden="true">
-      <circle cx="20" cy="20" r="19" fill="#191916" />
-      <circle cx="20" cy="20" r="19" fill="none" stroke={activity === 'listening' ? '#a3231d' : active ? '#2f6b3a' : '#9b978e'} strokeWidth="2" />
-      <text x="20" y="26" textAnchor="middle" fontSize="18" fontWeight="900" fill="#f3efe5" fontFamily="serif">
+      <circle cx="20" cy="20" r="19" style={{ fill: 'var(--dp-color-ink)' }} />
+      <circle cx="20" cy="20" r="19" fill="none" style={{ stroke: activity === 'listening' ? 'var(--dp-color-accent)' : active ? 'var(--dp-color-gain)' : 'var(--dp-color-rule)' }} strokeWidth="2" />
+      <text x="20" y="26" textAnchor="middle" fontSize="18" fontWeight="900" style={{ fill: 'var(--dp-color-ground)' }} fontFamily="serif">
         J
       </text>
     </svg>
@@ -209,7 +209,7 @@ export function Jarbas() {
         <div className="min-w-0 flex-1 ml-1">
           <p className="font-display font-black leading-tight">Jarbas IA</p>
           <p className="font-display text-xs text-ink-2 truncate" role="status">
-            <span className={cn('inline-block w-2 h-2 rounded-full mr-1', online && available ? 'bg-[#2f6b3a]' : 'bg-rule')} />
+            <span className={cn('inline-block w-2 h-2 rounded-full mr-1', online && available ? 'bg-[var(--dp-color-gain)]' : 'bg-rule')} />
             {activity !== 'idle' ? ACTIVITY_LABEL[activity] : providerText}
           </p>
         </div>

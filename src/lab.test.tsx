@@ -66,7 +66,7 @@ describe('oportunidades', () => {
     render(<Lab />);
     await userEvent.click(await screen.findByRole('button', { name: 'Abrir' }));
     expect(screen.getByText(/TESTC, strike 50,00/)).toBeTruthy();
-    expect(screen.getByText(/Breakeven:/)).toBeTruthy();
+    expect(screen.getByText(/Pontos de equilíbrio:/)).toBeTruthy();
     expect(screen.getByText('margem da corretora não disponível para perna vendida')).toBeTruthy();
   });
 
@@ -120,7 +120,7 @@ describe('resultados', () => {
       { day: '2026-10-09', pnl_brl: null, spot: 50, prices: {}, complete: false, settlement: false, source: 'brapi', fetched_at: '' },
     ] } };
     render(<Lab />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Backtest' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Simulação histórica' }));
     await userEvent.click(await screen.findByRole('button', { name: /Abrir PETR4/ }));
     expect(await screen.findByText('Retorno potencial')).toBeTruthy();
     expect(screen.getByText('Retorno teórico')).toBeTruthy();
@@ -155,7 +155,7 @@ describe('resultados', () => {
   it('roda backtest e avisa quando fica parcial', async () => {
     routes['POST /api/lab/backtests'] = { body: { entries: 2, created: 10, closed: 5, skipped: [{ entry: '2026-01-01', reason: 'limite de requisições' }], complete: false, symbol: 'PETR4' } };
     render(<Lab />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Backtest' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Simulação histórica' }));
     await userEvent.type(await screen.findByLabelText('Capital hipotético (R$)'), '1000');
     await userEvent.click(screen.getByRole('button', { name: 'Rodar' }));
     expect(await screen.findByText(/Parcial: rode de novo.*limite de requisições/)).toBeTruthy();

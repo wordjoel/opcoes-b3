@@ -34,7 +34,7 @@ export function StrategyGuideCard({ item }: { item: GuideItem }) {
               <dd className="mt-1">{guide.careful}</dd>
             </div>
             <div>
-              <dt className="np-label" style={{ color: '#2f6b3a' }}>
+              <dt className="np-label" style={{ color: 'var(--dp-color-gain)' }}>
                 Quando ganha
               </dt>
               <dd className="mt-1">{guide.wins}</dd>
@@ -57,7 +57,7 @@ export function StrategyGuideCard({ item }: { item: GuideItem }) {
         {steps.map(({ leg, cash, role }, index) => (
           <li
             key={`${leg.symbol}-${leg.action}`}
-            className={cn('flex gap-3 np-rule pt-2 transition-colors', highlight === index && 'bg-[#dfe7f2] outline outline-2 outline-[#1f4e8c]')}
+            className={cn('flex gap-3 np-rule pt-2 transition-colors', highlight === index && 'bg-[var(--dp-color-highlight)] outline outline-2 outline-[var(--dp-color-focus)]')}
             aria-current={highlight === index ? 'step' : undefined}
           >
             <span className="font-display font-black text-2xl leading-none w-6 shrink-0">{index + 1}</span>
@@ -68,7 +68,7 @@ export function StrategyGuideCard({ item }: { item: GuideItem }) {
                 {cash >= 0 ? (
                   <>você paga {formatCurrency(cash)}</>
                 ) : (
-                  <span style={{ color: '#2f6b3a' }}>você recebe {formatCurrency(-cash)}</span>
+                  <span style={{ color: 'var(--dp-color-gain)' }}>você recebe {formatCurrency(-cash)}</span>
                 )}
                 .
               </p>

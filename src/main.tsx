@@ -2,6 +2,10 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { aplicarPreferencia, lerPreferencia } from './lib/tema';
+
+// Antes do primeiro render, para não piscar o tema errado.
+aplicarPreferencia(lerPreferencia());
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

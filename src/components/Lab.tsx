@@ -1,13 +1,12 @@
+import { PALETA } from '../lib/tema';
 import { FormEvent, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, useResource } from '../services/api';
 import { LabOpportunity, LabRankingRow, LabStrategy, Regime } from '../types';
 import { formatCurrency, formatDay, formatLimit, formatNumber, formatRatio, REGIME_LABEL } from '../lib/utils';
+import { parseNumeroBR } from '../lib/numero';
 import { ErrorNotice, Loading, Panel, Signed } from './Common';
 
-const INK = '#191916';
-const PAPER = '#f3efe5';
-const SECONDARY = '#494843';
 const PERIODS = [1, 3, 5, 10, 15, 30];
 type Section = 'oportunidades' | 'acompanhamento' | 'backtest' | 'ranking';
 
@@ -37,7 +36,7 @@ export function Lab() {
   const sections: [Section, string][] = [
     ['oportunidades', 'Oportunidades'],
     ['acompanhamento', 'Em acompanhamento'],
-    ['backtest', 'Backtest'],
+    ['backtest', 'Simulação histórica'],
     ['ranking', 'Rankings'],
   ];
 
@@ -200,7 +199,7 @@ function OpportunityRow({ item, open, onToggle }: { key?: string; item: LabOppor
                   ))}
                 </ul>
                 <p className="text-xs text-ink-2 mt-2">
-                  Breakeven: {item.breakevens.length ? item.breakevens.map((value) => formatCurrency(value)).join(' e ') : 'nenhum'}. Bid e ask são as ofertas finais do pregão.
+                  Pontos de equilíbrio: {item.breakevens.length ? item.breakevens.map((value) => formatCurrency(value)).join(' e ') : 'nenhum'}. Bid e ask são as ofertas finais do pregão.
                 </p>
                 {[...item.decision.reasons, ...item.decision.missing].length > 0 && (
                   <ul className="text-xs text-accent mt-2 list-disc pl-4">
@@ -233,16 +232,26 @@ function StartForm({ item }: { item: LabOpportunity }) {
     event.preventDefault();
     setMessage(null);
     setFailure(null);
+    const cap = parseNumeroBR(capital);
+    const dias = parseNumeroBR(period === 'custom' ? custom : period);
+    const alvo = target.trim() === '' ? null : parseNumeroBR(target);
+    const parada = stop.trim() === '' ? null : parseNumeroBR(stop);
+    const custos = cost.trim() === '' ? null : parseNumeroBR(cost);
+    const erro = !cap.ok ? `Capital: ${cap.reason}` : !dias.ok ? `Dias: ${dias.reason}` : alvo && !alvo.ok ? `Alvo: ${alvo.reason}` : parada && !parada.ok ? `Stop: ${parada.reason}` : custos && !custos.ok ? `Custos: ${custos.reason}` : null;
+    if (erro) {
+      setFailure(erro);
+      return;
+    }
     try {
       const result = await api.labStart({
         symbol: item.symbol,
         agent: item.agent,
         key: item.key,
-        capital_brl: Number(capital),
-        period_days: Number(period === 'custom' ? custom : period),
-        target_pct: target ? Number(target) : null,
-        stop_pct: stop ? Number(stop) : null,
-        cost_brl: cost ? Number(cost) : null,
+        capital_brl: (cap as { value: number }).value,
+        period_days: (dias as { value: number }).value,
+        target_pct: alvo?.ok ? alvo.value : null,
+        stop_pct: parada?.ok ? parada.value : null,
+        cost_brl: custos?.ok ? custos.value : null,
       });
       setMessage(
         result.created
@@ -260,7 +269,7 @@ function StartForm({ item }: { item: LabOpportunity }) {
       <div className="flex flex-wrap gap-2 items-end">
         <label className="np-label">
           Capital hipotético (R$)
-          <input type="number" min="0.01" step="0.01" required value={capital} onChange={(event) => setCapital(event.target.value)} className="np-input block mt-1 w-32" />
+          <input type="text" inputMode="decimal" required value={capital} onChange={(event) => setCapital(event.target.value)} placeholder="ex.: 10.000,00" className="np-input block mt-1 w-32" />
         </label>
         <label className="np-label">
           Período
@@ -276,20 +285,20 @@ function StartForm({ item }: { item: LabOpportunity }) {
         {period === 'custom' && (
           <label className="np-label">
             Dias
-            <input type="number" min="1" max="365" required value={custom} onChange={(event) => setCustom(event.target.value)} className="np-input block mt-1 w-20" />
+            <input type="text" inputMode="numeric" required value={custom} onChange={(event) => setCustom(event.target.value)} placeholder="1 a 365" className="np-input block mt-1 w-20" />
           </label>
         )}
         <label className="np-label">
           Alvo (% do risco)
-          <input type="number" min="0.01" step="any" value={target} onChange={(event) => setTarget(event.target.value)} className="np-input block mt-1 w-24" />
+          <input type="text" inputMode="decimal" value={target} onChange={(event) => setTarget(event.target.value)} placeholder="ex.: 50" className="np-input block mt-1 w-24" />
         </label>
         <label className="np-label">
           Stop (% do risco)
-          <input type="number" min="0.01" max="100" step="any" value={stop} onChange={(event) => setStop(event.target.value)} className="np-input block mt-1 w-24" />
+          <input type="text" inputMode="decimal" value={stop} onChange={(event) => setStop(event.target.value)} placeholder="ex.: 100" className="np-input block mt-1 w-24" />
         </label>
         <label className="np-label">
           Custos (R$)
-          <input type="number" min="0" step="0.01" value={cost} onChange={(event) => setCost(event.target.value)} className="np-input block mt-1 w-24" />
+          <input type="text" inputMode="decimal" value={cost} onChange={(event) => setCost(event.target.value)} placeholder="ex.: 4,90" className="np-input block mt-1 w-24" />
         </label>
         <button type="submit" className="np-btn">Acompanhar</button>
       </div>
@@ -387,7 +396,14 @@ function Backtests({ onOpen }: { onOpen: (id: string) => void }) {
     setNote(null);
     setFailure(null);
     try {
-      const result = await api.labBacktest({ symbol, capital_brl: Number(capital), period_days: Number(period), weeks: Number(weeks) });
+      const cap = parseNumeroBR(capital);
+      const semanas = parseNumeroBR(weeks);
+      const dias = parseNumeroBR(period);
+      if (!cap.ok || !semanas.ok || !dias.ok) {
+        setFailure(!cap.ok ? `Capital: ${cap.reason}` : !semanas.ok ? `Semanas: ${semanas.reason}` : `Período: ${(dias as { reason: string }).reason}`);
+        return;
+      }
+      const result = await api.labBacktest({ symbol, capital_brl: cap.value, period_days: dias.value, weeks: semanas.value });
       setNote(
         `Entradas: ${result.entries}. Novas estratégias: ${result.created}. ${
           result.complete ? 'Concluído.' : 'Parcial: rode de novo para continuar de onde parou.'
@@ -417,7 +433,7 @@ function Backtests({ onOpen }: { onOpen: (id: string) => void }) {
         </label>
         <label className="np-label">
           Capital hipotético (R$)
-          <input type="number" min="0.01" step="0.01" required value={capital} onChange={(event) => setCapital(event.target.value)} className="np-input block mt-1 w-32" />
+          <input type="text" inputMode="decimal" required value={capital} onChange={(event) => setCapital(event.target.value)} placeholder="ex.: 10.000,00" className="np-input block mt-1 w-32" />
         </label>
         <label className="np-label">
           Período
@@ -429,7 +445,7 @@ function Backtests({ onOpen }: { onOpen: (id: string) => void }) {
         </label>
         <label className="np-label">
           Semanas
-          <input type="number" min="1" max="52" required value={weeks} onChange={(event) => setWeeks(event.target.value)} className="np-input block mt-1 w-20" />
+          <input type="text" inputMode="numeric" required value={weeks} onChange={(event) => setWeeks(event.target.value)} placeholder="1 a 52" className="np-input block mt-1 w-20" />
         </label>
         <button type="submit" disabled={running} className="np-btn">{running ? 'Rodando...' : 'Rodar'}</button>
         {note && <p role="status" className="basis-full text-sm">{note}</p>}
@@ -570,18 +586,18 @@ function StrategyDetail({ id, onBack }: { id: string; onBack: () => void }) {
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={curve} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
-                <CartesianGrid stroke="#d9d4c8" vertical={false} />
-                <XAxis dataKey="day" stroke={SECONDARY} fontSize={12} tickLine={false} axisLine={false} tickFormatter={(day: string) => formatDay(day).slice(0, 5)} />
-                <YAxis stroke={SECONDARY} fontSize={12} tickLine={false} axisLine={false} width={64} />
-                <ReferenceLine y={0} stroke={SECONDARY} />
+                <CartesianGrid stroke={PALETA.GRID} vertical={false} />
+                <XAxis dataKey="day" stroke={PALETA.SECONDARY} fontSize={12} tickLine={false} axisLine={false} tickFormatter={(day: string) => formatDay(day).slice(0, 5)} />
+                <YAxis stroke={PALETA.SECONDARY} fontSize={12} tickLine={false} axisLine={false} width={64} />
+                <ReferenceLine y={0} stroke={PALETA.SECONDARY} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: PAPER, border: `1px solid ${INK}`, borderRadius: 0 }}
-                  labelStyle={{ color: SECONDARY }}
-                  itemStyle={{ color: INK }}
+                  contentStyle={{ backgroundColor: PALETA.PAPER, border: `1px solid ${PALETA.INK}`, borderRadius: 0 }}
+                  labelStyle={{ color: PALETA.SECONDARY }}
+                  itemStyle={{ color: PALETA.INK }}
                   labelFormatter={(day) => formatDay(String(day))}
                   formatter={(value) => [formatCurrency(Number(value)), 'Resultado']}
                 />
-                <Line type="linear" dataKey="pnl_brl" stroke={INK} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+                <Line type="linear" dataKey="pnl_brl" stroke={PALETA.INK} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>

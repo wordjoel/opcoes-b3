@@ -25,6 +25,13 @@
   --dp-border-section: 4px;
   --dp-border-focus: 2px;
   --dp-motion-transition: none;
+  --dp-color-grid: #d9d4c8;
+  --dp-color-gain: #2f6b3a;
+  --dp-color-loss: #a3231d;
+  --dp-color-focus: #1f4e8c;
+  --dp-color-hover: #e6e0d2;
+  --dp-color-highlight: #dfe7f2;
+  color-scheme: light;
 }
 
 @theme {
@@ -35,6 +42,50 @@
   --color-accent: #a3231d;
   --font-display: "Newsprint Display", "Source Serif 4", Georgia, serif;
   --font-reading: "Newsprint Reading", "EB Garamond", Georgia, serif;
+}
+
+/* Escuro (depois do @theme, para vencer as cores claras). Automático segue o sistema;
+   a escolha manual, pelo atributo data-theme, vence em qualquer caso. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --dp-color-ground: #161512;
+    --dp-color-ink: #ece8dc;
+    --dp-color-secondary: #bdb9ae;
+    --dp-color-rule: #7b776d;
+    --dp-color-accent: #e8675d;
+    --dp-color-grid: #3a3832;
+    --dp-color-gain: #7cc68b;
+    --dp-color-loss: #e8675d;
+    --dp-color-focus: #8fb8ec;
+    --dp-color-hover: #2a2822;
+    --dp-color-highlight: #1f2b3d;
+    --color-paper: #161512;
+    --color-ink: #ece8dc;
+    --color-ink-2: #bdb9ae;
+    --color-rule: #7b776d;
+    --color-accent: #e8675d;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --dp-color-ground: #161512;
+  --dp-color-ink: #ece8dc;
+  --dp-color-secondary: #bdb9ae;
+  --dp-color-rule: #7b776d;
+  --dp-color-accent: #e8675d;
+  --dp-color-grid: #3a3832;
+  --dp-color-gain: #7cc68b;
+  --dp-color-loss: #e8675d;
+  --dp-color-focus: #8fb8ec;
+  --dp-color-hover: #2a2822;
+  --dp-color-highlight: #1f2b3d;
+  --color-paper: #161512;
+  --color-ink: #ece8dc;
+  --color-ink-2: #bdb9ae;
+  --color-rule: #7b776d;
+  --color-accent: #e8675d;
+  color-scheme: dark;
 }
 
 @layer base {

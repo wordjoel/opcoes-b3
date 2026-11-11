@@ -16,6 +16,7 @@ import { Masthead } from './components/Masthead';
 import { Scanner } from './components/Scanner';
 import { StrategyView } from './components/StrategyView';
 import { api, ApiError, setUnauthorizedHandler, useResource } from './services/api';
+import { useTemaVersao } from './lib/tema';
 
 type Session = { authenticated: boolean; login_ready: boolean };
 
@@ -46,6 +47,8 @@ export default function App() {
 }
 
 function Workspace({ onLogout }: { onLogout: () => void }) {
+  // Redesenha a tela inteira quando a aparência muda: os gráficos leem as cores ao desenhar.
+  useTemaVersao();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selected, setSelected] = useState<string | null>(null);
 

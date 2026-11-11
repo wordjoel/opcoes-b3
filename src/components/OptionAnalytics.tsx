@@ -1,13 +1,10 @@
+import { PALETA } from '../lib/tema';
 import { type CSSProperties, useMemo } from 'react';
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Candidate, ChainView } from '../types';
 import { formatChange, formatCompact, formatCurrency, formatNumber, formatRatio } from '../lib/utils';
 import { Panel, Stat } from './Common';
 
-const INK = '#191916';
-const PAPER = '#f3efe5';
-const ACCENT = '#a3231d';
-const SECONDARY = '#494843';
 
 /** Sensibilidade hoje: número com sinal sempre visível, para a leitura não depender só da cor. */
 export function PnlHeatmap({ heatmap }: { heatmap: NonNullable<Candidate['heatmap']> }) {
@@ -89,19 +86,19 @@ export function SkewChart({ chain }: { chain: ChainView }) {
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 16, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid stroke="#d9d4c8" vertical={false} />
+            <CartesianGrid stroke={PALETA.GRID} vertical={false} />
             <XAxis
               dataKey="strike"
               type="number"
               domain={['dataMin', 'dataMax']}
-              stroke={SECONDARY}
+              stroke={PALETA.SECONDARY}
               fontSize={12}
               tickLine={false}
               axisLine={false}
               tickFormatter={(value: number) => value.toFixed(0)}
             />
             <YAxis
-              stroke={SECONDARY}
+              stroke={PALETA.SECONDARY}
               fontSize={12}
               tickLine={false}
               axisLine={false}
@@ -111,20 +108,20 @@ export function SkewChart({ chain }: { chain: ChainView }) {
             />
             <ReferenceLine
               x={chain.spot}
-              stroke={SECONDARY}
+              stroke={PALETA.SECONDARY}
               strokeDasharray="4 4"
-              label={{ value: 'Ativo na grade', fill: SECONDARY, fontSize: 11, position: 'top' }}
+              label={{ value: 'Ativo na grade', fill: PALETA.SECONDARY, fontSize: 11, position: 'top' }}
             />
             <Tooltip
-              contentStyle={{ backgroundColor: PAPER, border: `1px solid ${INK}`, borderRadius: 0 }}
-              labelStyle={{ color: SECONDARY }}
-              itemStyle={{ color: INK }}
+              contentStyle={{ backgroundColor: PALETA.PAPER, border: `1px solid ${PALETA.INK}`, borderRadius: 0 }}
+              labelStyle={{ color: PALETA.SECONDARY }}
+              itemStyle={{ color: PALETA.INK }}
               labelFormatter={(strike) => `Strike ${formatCurrency(Number(strike))}`}
               formatter={(value, name) => [formatRatio(Number(value)), name]}
             />
-            <Legend wrapperStyle={{ fontSize: 12, color: SECONDARY }} />
-            <Line name="Call" dataKey="call" stroke={INK} strokeWidth={2} dot={{ r: 2 }} connectNulls isAnimationActive={false} />
-            <Line name="Put" dataKey="put" stroke={ACCENT} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 2 }} connectNulls isAnimationActive={false} />
+            <Legend wrapperStyle={{ fontSize: 12, color: PALETA.SECONDARY }} />
+            <Line name="Call" dataKey="call" stroke={PALETA.INK} strokeWidth={2} dot={{ r: 2 }} connectNulls isAnimationActive={false} />
+            <Line name="Put" dataKey="put" stroke={PALETA.ACCENT} strokeWidth={2} strokeDasharray="5 3" dot={{ r: 2 }} connectNulls isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>

@@ -5,6 +5,7 @@
 
 import { type CSSProperties, FormEvent, useEffect, useMemo, useState } from 'react';
 import { api, ApiError, useResource } from '../services/api';
+import { paraCampo, parseNumeroBR } from '../lib/numero';
 import { CalendarCandidate, CalendarsView, Candidate, ChainQuote, ChainView, DecisionStatus, Profile, StrategiesView } from '../types';
 import {
   cn,
@@ -143,8 +144,14 @@ function RiskSettingsForm({ onSaved }: { onSaved: () => void }) {
     event.preventDefault();
     setMessage(null);
     setFailure(null);
+    const cap = parseNumeroBR(capital);
+    const perda = parseNumeroBR(limit);
+    if (!cap.ok || !perda.ok) {
+      setFailure(!cap.ok ? `Capital: ${cap.reason}` : `Perda máxima: ${(perda as { reason: string }).reason}`);
+      return;
+    }
     try {
-      await api.saveRiskSettings(Number(capital), Number(limit));
+      await api.saveRiskSettings(cap.value, perda.value);
       setMessage('Capital e limite salvos.');
       settings.reload();
       onSaved();
@@ -165,11 +172,11 @@ function RiskSettingsForm({ onSaved }: { onSaved: () => void }) {
       </div>
       <label className="np-label">
         Capital (R$)
-        <input type="number" min="0.01" step="0.01" required value={capital} onChange={(event) => setCapital(event.target.value)} className="np-input block mt-1 w-40" />
+        <input type="text" inputMode="decimal" required value={capital} onChange={(event) => setCapital(event.target.value)} placeholder="ex.: 10.000,00" className="np-input block mt-1 w-40" />
       </label>
       <label className="np-label">
         Perda máxima por estrutura (%)
-        <input type="number" min="0.01" max="100" step="0.01" required value={limit} onChange={(event) => setLimit(event.target.value)} className="np-input block mt-1 w-40" />
+        <input type="text" inputMode="decimal" required value={limit} onChange={(event) => setLimit(event.target.value)} placeholder="ex.: 2" className="np-input block mt-1 w-40" />
       </label>
       <button type="submit" className="np-btn">
         Salvar
@@ -189,17 +196,24 @@ function CostSettingsForm({ onSaved }: { onSaved: () => void }) {
   const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
-    if (settings.data?.per_order_brl != null) setPerOrder(String(settings.data.per_order_brl));
-    if (settings.data?.fee_pct != null) setFee(String(settings.data.fee_pct));
-    if (settings.data?.income_tax_pct != null) setTax(String(settings.data.income_tax_pct));
+    if (settings.data?.per_order_brl != null) setPerOrder(paraCampo(settings.data.per_order_brl));
+    if (settings.data?.fee_pct != null) setFee(paraCampo(settings.data.fee_pct));
+    if (settings.data?.income_tax_pct != null) setTax(paraCampo(settings.data.income_tax_pct));
   }, [settings.data]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setMessage(null);
     setFailure(null);
+    const ordem = parseNumeroBR(perOrder);
+    const taxa = parseNumeroBR(fee);
+    const imposto = parseNumeroBR(tax);
+    if (!ordem.ok || !taxa.ok || !imposto.ok) {
+      setFailure(!ordem.ok ? `Corretagem: ${ordem.reason}` : !taxa.ok ? `Taxas: ${taxa.reason}` : `Imposto: ${(imposto as { reason: string }).reason}`);
+      return;
+    }
     try {
-      await api.saveCostSettings(Number(perOrder), Number(fee), Number(tax));
+      await api.saveCostSettings(ordem.value, taxa.value, imposto.value);
       setMessage('Custos salvos.');
       settings.reload();
       onSaved();
@@ -220,15 +234,15 @@ function CostSettingsForm({ onSaved }: { onSaved: () => void }) {
       </div>
       <label className="np-label">
         Corretagem por ordem (R$)
-        <input type="number" min="0" step="0.01" required value={perOrder} onChange={(event) => setPerOrder(event.target.value)} className="np-input block mt-1 w-32" />
+        <input type="text" inputMode="decimal" required value={perOrder} onChange={(event) => setPerOrder(event.target.value)} placeholder="ex.: 4,90" className="np-input block mt-1 w-32" />
       </label>
       <label className="np-label">
         Taxas da B3 (% do financeiro)
-        <input type="number" min="0" max="5" step="0.0001" required value={fee} onChange={(event) => setFee(event.target.value)} className="np-input block mt-1 w-32" />
+        <input type="text" inputMode="decimal" required value={fee} onChange={(event) => setFee(event.target.value)} placeholder="ex.: 0,0275" className="np-input block mt-1 w-32" />
       </label>
       <label className="np-label">
         Imposto sobre o ganho (%)
-        <input type="number" min="0" max="100" step="0.01" required value={tax} onChange={(event) => setTax(event.target.value)} className="np-input block mt-1 w-32" />
+        <input type="text" inputMode="decimal" required value={tax} onChange={(event) => setTax(event.target.value)} placeholder="ex.: 15" className="np-input block mt-1 w-32" />
       </label>
       <button type="submit" className="np-btn" aria-label="Salvar custos">
         Salvar
@@ -349,7 +363,7 @@ function Analysis({ view, expirations }: { view: StrategiesView; expirations: st
                 <button
                   onClick={() => setSelectedKey(item.key)}
                   aria-current={selected?.key === item.key}
-                  className="w-full py-2 px-1 text-left font-display cursor-pointer hover:bg-[#e6e0d2] aria-[current=true]:bg-[#e6e0d2]"
+                  className="w-full py-2 px-1 text-left font-display cursor-pointer hover:bg-[var(--dp-color-hover)] aria-[current=true]:bg-[var(--dp-color-hover)]"
                 >
                   <span className="flex items-start justify-between gap-2">
                     <span className="font-semibold text-sm">
@@ -445,7 +459,7 @@ function CalendarSection({
                   <button
                     onClick={() => setSelectedKey(item.key)}
                     aria-current={selected?.key === item.key}
-                    className="w-full py-2 px-1 text-left font-display cursor-pointer hover:bg-[#e6e0d2] aria-[current=true]:bg-[#e6e0d2]"
+                    className="w-full py-2 px-1 text-left font-display cursor-pointer hover:bg-[var(--dp-color-hover)] aria-[current=true]:bg-[var(--dp-color-hover)]"
                   >
                     <span className="flex items-start justify-between gap-2">
                       <span className="font-semibold text-sm">{item.name}</span>
