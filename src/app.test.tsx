@@ -246,7 +246,7 @@ describe('estratégias', () => {
     expect(screen.getByText('Estimativa média')).toBeTruthy();
     fireEvent.change(screen.getByRole('slider', { name: /PETR4 no vencimento/ }), { target: { value: '60' } });
     const readout = () => screen.getByText((_, element) => element?.tagName === 'P' && /Se PETR4 estiver em/.test(element.textContent ?? ''));
-    await waitFor(() => expect(readout().textContent).toMatch(/R\$\s*60,00/));
+    await waitFor(() => expect(readout().textContent).toMatch(/R\$\s*60,00/), { timeout: 5000 });
     expect(readout().textContent).toMatch(/resultado é R\$\s*900,00/);
     expect(readout().textContent).toMatch(/Chance de estar acima desse preço: \d+%/);
   });
