@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { aplicarPreferencia, lerPreferencia, PREFERENCIAS, Preferencia, salvarPreferencia } from '../lib/tema';
+import { ThemeToggle } from './ThemeToggle';
 
 const MENU = [
   { id: 'dashboard', label: 'Monitor' },
@@ -9,29 +8,6 @@ const MENU = [
   { id: 'lab', label: 'Laboratório' },
   { id: 'carteira', label: 'Carteira' },
 ];
-
-function SeletorAparencia() {
-  const [preferencia, setPreferencia] = useState<Preferencia>(() => lerPreferencia());
-
-  const escolher = (valor: Preferencia) => {
-    setPreferencia(valor);
-    salvarPreferencia(valor);
-    aplicarPreferencia(valor);
-  };
-
-  return (
-    <label className="np-label">
-      Aparência
-      <select value={preferencia} onChange={(event) => escolher(event.target.value as Preferencia)} className="np-input block mt-1">
-        {PREFERENCIAS.map((item) => (
-          <option key={item.value} value={item.value}>
-            {item.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
 
 interface MastheadProps {
   activeTab: string;
@@ -60,7 +36,7 @@ export function Masthead({ activeTab, setActiveTab, alertCount, onLogout }: Mast
         </nav>
         <div className="flex flex-wrap items-center gap-4">
           <p className="np-label">Análise e decisão. Este app não envia ordens.</p>
-          <SeletorAparencia />
+          <ThemeToggle />
           <button onClick={onLogout} className="np-btn">
             Sair
           </button>

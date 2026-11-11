@@ -13,6 +13,7 @@ import { Dashboard } from './components/Dashboard';
 import { Lab } from './components/Lab';
 import { Login } from './components/Login';
 import { Masthead } from './components/Masthead';
+import { ThemeToggle } from './components/ThemeToggle';
 import { Scanner } from './components/Scanner';
 import { StrategyView } from './components/StrategyView';
 import { api, ApiError, setUnauthorizedHandler, useResource } from './services/api';
@@ -37,6 +38,9 @@ export default function App() {
   if (failure) {
     return (
       <div className="min-h-screen p-4 md:p-8 max-w-3xl mx-auto">
+        <div className="flex justify-end mb-4">
+          <ThemeToggle />
+        </div>
         <ErrorNotice error={failure} onRetry={check} />
       </div>
     );

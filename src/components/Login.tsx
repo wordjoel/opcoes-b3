@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { api, ApiError } from '../services/api';
+import { ThemeToggle } from './ThemeToggle';
 
 export function Login({ ready, onSuccess }: { ready: boolean; onSuccess: () => void }) {
   const [password, setPassword] = useState('');
@@ -23,6 +24,9 @@ export function Login({ ready, onSuccess }: { ready: boolean; onSuccess: () => v
 
   return (
     <div className="min-h-screen p-4 md:p-8 max-w-[1400px] mx-auto">
+      <div className="flex justify-end mb-4">
+        <ThemeToggle />
+      </div>
       <h1 className="text-[clamp(3rem,10vw,7.5rem)] leading-[0.95] tracking-tight border-b-4 border-ink pb-3">B3 Opções Pro</h1>
       <form onSubmit={submit} className="max-w-sm mt-8 space-y-4">
         {!ready && (
