@@ -26,6 +26,10 @@ O arquivo da B3 de cada pregão sai por volta das 21h; o cron roda às 22h.
 - **Proventos:** `data/providers/b3_eventos.py` lê dividendos, JCP, rendimentos, desdobramentos, grupamentos e bonificações na página de empresas listadas da B3 (gratuita) e ajusta os preços antes de cada data ex. Dividendos usam o valor bruto sobre o fechamento da data com. Subscrições não são ajustadas. Se a consulta falhar, ou se a B3 não listar nenhum evento daquele ISIN, o histórico volta sem ajuste e a tela avisa. Cada empresa é consultada no máximo a cada 12 horas; depois de uma falha, a próxima tentativa só acontece 30 minutos depois.
 - **Backtest:** o COTAHIST só lista séries negociadas naquele dia, a mesma regra de preço do Laboratório.
 
+## Resiliência
+
+`core/retry.py` repete no máximo três vezes, com backoff exponencial e jitter, só erros de transporte e HTTP 408/425/5xx nas consultas da B3, do Banco Central e da brapi. Respostas 404 ("sem arquivo"/"sem pregão") e 429 (limite de requisições) não são repetidas: cada fonte já tem regra própria para elas. Se ainda falhar, o erro continua virando `DataInsufficientError`, nunca um número inventado. Os intervalos e essa semântica estão em `tests/test_retry.py`.
+
 ## Carga inicial
 
 ```

@@ -86,10 +86,12 @@ def test_client_caches_and_backs_off_after_failure():
     for _ in range(2):
         with pytest.raises(DataInsufficientError):
             actions.events("FAIL")
-    assert len(calls) == 2
+    # Três tentativas transitórias na primeira falha; a segunda chamada já é
+    # bloqueada pelo recuo de 30 minutos, sem nova consulta à fonte.
+    assert len(calls) == 4
     clock[0] = 13 * 3600
     actions.events("PETR")
-    assert len(calls) == 3
+    assert len(calls) == 5
 
 
 class _Actions:

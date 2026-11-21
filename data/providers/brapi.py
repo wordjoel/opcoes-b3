@@ -20,6 +20,7 @@ import httpx
 
 from core.calendario_b3 import monthly_option_expiry, previous_trading_day
 from core.exceptions import DataInsufficientError
+from core.retry import retry_request
 from core.types import (
     CorporateEvent,
     ExerciseStyle,
@@ -107,17 +108,12 @@ class BrapiProvider(DataProvider):
     def _get(self, path: str, params: dict[str, str]) -> dict:
         if time.monotonic() < self._blocked_until:
             raise DataInsufficientError("limite de requisições da brapi atingido")
-        response = None
-        for attempt in range(2):
-            try:
-                response = self._client.get(f"{BASE_URL}{path}", params=params, headers=self._headers)
-            except httpx.HTTPError as error:
-                if attempt == 1:
-                    raise DataInsufficientError(f"brapi inacessível ({type(error).__name__})") from None
-                continue
-            if response.status_code < 500:
-                break
-        assert response is not None
+        try:
+            response = retry_request(
+                lambda: self._client.get(f"{BASE_URL}{path}", params=params, headers=self._headers)
+            )
+        except httpx.HTTPError as error:
+            raise DataInsufficientError(f"brapi inacessível ({type(error).__name__})") from None
         if response.status_code == 401:
             raise DataInsufficientError("brapi recusou o acesso: token ausente ou inválido")
         if response.status_code == 403:

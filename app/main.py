@@ -20,7 +20,7 @@ import httpx
 from app import auth, carteira, lab, service
 from app.jarbas import catalog as jarbas_catalog, store as jarbas_store, tools as jarbas_tools
 from app.jarbas.assistant import MAX_MESSAGE_CHARS, StrategyContext, recent_turns, system_prompt
-from app.jarbas.providers import AllProvidersFailed, ChatMessage, ProviderManager, providers_from_env
+from app.jarbas.providers import AllProvidersFailed, ChatMessage, ProviderManager, config_warnings, providers_from_env
 from app.cache import CachingProvider
 from core.clock import market_today
 from core.config import load_local_env
@@ -72,7 +72,7 @@ CACHE_RETENTION = timedelta(days=7)
 JARBAS_PER_MINUTE = 20
 
 
-JARBAS_PROVIDERS = ("openrouter", "gemini", "groq", "custom")
+JARBAS_PROVIDERS = ("openrouter", "gemini", "groq", "custom", "hermes")
 
 
 class JarbasRequest(BaseModel):
@@ -82,7 +82,7 @@ class JarbasRequest(BaseModel):
 
 
 class JarbasSettingsRequest(BaseModel):
-    provider_order: list[Literal["openrouter", "gemini", "groq", "custom"]] = Field(min_length=1, max_length=4)
+    provider_order: list[Literal["openrouter", "gemini", "groq", "custom", "hermes"]] = Field(min_length=1, max_length=5)
     openrouter_model: str | None = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9._/:-]+$")
     allow_paid: bool = False
     daily_limit: int = Field(ge=1, le=2000)
@@ -484,6 +484,37 @@ def create_app(
             "voice": {key: settings[key] for key in ("speak_replies", "voice_name", "voice_rate")},
         }
 
+    @router.get("/jarbas/diagnose", dependencies=protected)
+    def jarbas_diagnose(db: Database = Depends(database)) -> dict:
+        """Testa o alcance de cada provedor. Nunca devolve URL, chave ou cabeçalho."""
+        settings = jarbas_store.read_settings(db)
+        jarbas.apply(settings["provider_order"])
+        checks: list[dict] = []
+        with httpx.Client(transport=ai_transport) as client:
+            for provider in jarbas.providers:
+                try:
+                    checks.append(provider.probe(client).as_dict())
+                except (httpx.HTTPError, ValueError, KeyError, TypeError):
+                    checks.append(
+                        {
+                            "name": provider.name,
+                            "label": provider.label,
+                            "ok": False,
+                            "reachable": False,
+                            "latency_ms": 0,
+                            "http_status": None,
+                            "reason": "falha ao verificar o provedor",
+                        }
+                    )
+        # Provedores não configurados são normais (a ordem padrão lista todos);
+        # os avisos de ambiente, sim, indicam erro de configuração.
+        issues = config_warnings()
+        return {
+            "ok": bool(checks) and all(item["ok"] for item in checks) and not issues,
+            "providers": checks,
+            "issues": issues,
+        }
+
     @router.get("/jarbas/settings", dependencies=protected)
     def jarbas_settings(db: Database = Depends(database)) -> dict:
         return {**jarbas_store.read_settings(db), "configured_providers": [p.name for p in jarbas.providers]}
@@ -569,6 +600,12 @@ def create_app(
             except AllProvidersFailed as failure:
                 for attempt in failure.attempts:
                     jarbas_store.record_usage(db, day, attempt.provider, "-", False, None, None)
+                # Allowlist de campos: nunca logar pergunta, resposta, URL ou chave.
+                logger.info(
+                    "jarbas chat ok=False attempts=%d latency_ms=%d",
+                    len(failure.attempts),
+                    int((time.monotonic() - moment) * 1000),
+                )
                 raise HTTPException(
                     503,
                     {
@@ -584,10 +621,21 @@ def create_app(
             db, conversation, "assistant", result.text, now(), result.label, result.model,
             tools=used, prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens, latency_ms=result.latency_ms,
         )
+        # Allowlist de campos: nunca logar pergunta, resposta, URL ou chave.
+        logger.info(
+            "jarbas chat ok=True provider=%s model=%s attempts=%d latency_ms=%d prompt_tokens=%s completion_tokens=%s",
+            result.provider,
+            result.model[:80],
+            len(result.attempts),
+            result.latency_ms,
+            result.prompt_tokens,
+            result.completion_tokens,
+        )
         return {
             "reply": result.text,
             "provider": result.label,
             "model": result.model,
+            "latency_ms": result.latency_ms,
             "attempts": [{"provider": a.provider, "error": a.error} for a in result.attempts],
             "conversation_id": conversation,
             "tools": used,

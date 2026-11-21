@@ -262,6 +262,45 @@ describe('Jarbas: histórico, consumo e configurações', () => {
     expect(await screen.findByRole('button', { name: 'Como está minha carteira?' })).toBeTruthy();
     expect(screen.getByText(/posso consultar mercado, travas e carteira/)).toBeTruthy();
   });
+
+  it('mostra o diagnóstico de conexão dos provedores', async () => {
+    routes['GET /api/jarbas/settings'] = () => ({
+      body: {
+        provider_order: ['hermes'], openrouter_model: null, allow_paid: false, daily_limit: 200, retention_days: 90,
+        speak_replies: true, voice_name: null, voice_rate: 1, updated_at: null, configured_providers: ['hermes'],
+      },
+    });
+    routes['GET /api/jarbas/diagnose'] = () => ({
+      body: {
+        ok: false,
+        providers: [{ name: 'hermes', label: 'Hermes', ok: false, reachable: true, latency_ms: 12, http_status: 401, reason: 'chave recusada pelo provedor' }],
+        issues: [],
+      },
+    });
+    await openJarbas();
+    await userEvent.click(screen.getByRole('button', { name: 'Configurações do Jarbas' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Testar conexão dos provedores' }));
+    expect(await screen.findByText(/Problemas encontrados/)).toBeTruthy();
+    expect(await screen.findByText(/Hermes: falhou — chave recusada pelo provedor/)).toBeTruthy();
+  });
+
+  it('fala uma frase por vez e só termina na última', async () => {
+    routes['POST /api/jarbas/chat'] = () => ({
+      body: {
+        reply: 'Primeira frase. Segunda frase.', provider: 'OpenRouter', model: 'm', latency_ms: 42, attempts: [],
+        conversation_id: 'c'.repeat(32), tools: [], usage: { questions: 1, daily_limit: 200 },
+      },
+    });
+    await openJarbas();
+    await userEvent.click(screen.getByRole('button', { name: 'Explicar esta estratégia' }));
+    await screen.findByText('Primeira frase. Segunda frase.');
+    const spoken = () => synth.speak.mock.calls.map(([utterance]) => (utterance as { text: string }).text).filter(Boolean);
+    expect(spoken()).toEqual(['Primeira frase.']);
+    const first = synth.speak.mock.calls.find(([utterance]) => (utterance as { text: string }).text)![0] as { onend?: () => void };
+    act(() => first.onend?.());
+    expect(spoken()).toEqual(['Primeira frase.', 'Segunda frase.']);
+    expect(screen.getByText('via OpenRouter · m · 42 ms')).toBeTruthy();
+  });
 });
 
 describe('voz', () => {

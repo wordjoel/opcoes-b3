@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from db.client import Database
 
 DEFAULTS = {
-    "provider_order": ["openrouter", "gemini", "groq", "custom"],
+    "provider_order": ["openrouter", "gemini", "groq", "custom", "hermes"],
     "openrouter_model": None,
     "allow_paid": False,
     "daily_limit": 200,

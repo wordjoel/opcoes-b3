@@ -12,6 +12,8 @@ coverage/
 __pycache__/
 *.pyc
 .pytest_cache/
+.coverage
+htmlcov/
 
 # Banco local de desenvolvimento
 .b3-local.db*

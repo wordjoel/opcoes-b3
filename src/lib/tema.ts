@@ -85,6 +85,13 @@ export const PALETA = {
   get LOSS() {
     return cor('--dp-color-loss');
   },
+  /** Cores dos candles: separadas de GAIN/LOSS para poderem ser mais vivas sem afetar o resto da UI. */
+  get CANDLE_UP() {
+    return cor('--dp-color-candle-up');
+  },
+  get CANDLE_DOWN() {
+    return cor('--dp-color-candle-down');
+  },
   get FOCUS() {
     return cor('--dp-color-focus');
   },

@@ -3,15 +3,19 @@
 Cada provedor só existe se a sua chave estiver em variável de ambiente do servidor; nada
 vai ao navegador. Nenhum provedor é tratado como gratuito e ilimitado: cota esgotada (429),
 falta de saldo (402) ou falha deixam o provedor de lado por um tempo e a pergunta segue
-para o próximo. Cada pergunta faz no máximo uma tentativa por modelo: não há laço de repetição.
+para o próximo. Cada modelo é chamado no máximo duas vezes, e só diante de falha transitória
+(5xx ou timeout); cota, chave inválida e modelo inexistente nunca são repetidos.
 """
 
 import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import httpx
+
+from core.retry import retry_request
 
 # Tempo máximo de cada chamada: o total cabe nos 60 s da função na Vercel.
 PROVIDER_TIMEOUT = 25.0
@@ -25,12 +29,25 @@ MIN_CALL_SECONDS = 4.0
 OPENROUTER_FREE_MODELS = "nvidia/nemotron-3-ultra-550b-a55b:free,google/gemma-4-31b-it:free,nvidia/nemotron-3.5-super-vl:free"
 TRUNCATED_NOTE = " […resposta cortada pelo limite de tamanho; peça para eu continuar.]"
 TEMPERATURE = 0.3
-DEFAULT_ORDER = ("openrouter", "gemini", "groq", "custom")
+DEFAULT_ORDER = ("openrouter", "gemini", "groq", "custom", "hermes")
+# Nomes aceitos para o agente Hermes já implantado. Ele é chamado como qualquer
+# outro serviço compatível com /chat/completions da OpenAI; a URL e o modelo vêm
+# do ambiente, para não prender o app a um endereço específico.
+HERMES_MODEL = "hermes"
 
 # Quanto tempo um provedor fica de lado depois de cada tipo de falha.
 COOLDOWN_QUOTA = 60.0
 COOLDOWN_ERROR = 30.0
 COOLDOWN_AUTH = 600.0
+# Uma única repetição para falhas transitórias (5xx, timeout): cobre queda curta
+# sem duplicar cobrança nem estourar o orçamento da pergunta.
+RETRY_ATTEMPTS = 2
+RETRY_BASE_DELAY = 0.1
+RETRY_MAX_DELAY = 0.2
+# Indireção para os testes não dormirem de verdade.
+_retry_sleep = time.sleep
+# Tempo curto para a sonda de conexão (doctor): nunca espera uma resposta de modelo.
+PROBE_TIMEOUT = 5.0
 
 
 @dataclass(frozen=True)
@@ -45,6 +62,30 @@ class ProviderReply:
     model: str
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """Resultado sanitizado da sonda de conexão: nunca contém URL, chave ou cabeçalho."""
+
+    name: str
+    label: str
+    ok: bool
+    reachable: bool
+    latency_ms: int
+    http_status: int | None = None
+    reason: str | None = None
+
+    def as_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "label": self.label,
+            "ok": self.ok,
+            "reachable": self.reachable,
+            "latency_ms": self.latency_ms,
+            "http_status": self.http_status,
+            "reason": self.reason,
+        }
 
 
 class ProviderError(Exception):
@@ -77,6 +118,56 @@ def _tokens(value) -> int | None:
     return value if isinstance(value, int) and value >= 0 else None
 
 
+def _chat_base_url(url: str, name: str = "Hermes") -> str:
+    """Normaliza a URL para `/v1` e recusa endereços inseguros ou ambíguos.
+
+    A mensagem de erro é genérica de propósito: ela pode aparecer no painel e não
+    deve revelar host, porta, usuário ou qualquer parte da configuração.
+    """
+    base = url.strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")]
+    parsed = urlparse(base)
+    host = (parsed.hostname or "").lower()
+    local = host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local")
+    invalid = (
+        parsed.scheme not in ("http", "https")
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or bool(parsed.query)
+        or bool(parsed.fragment)
+        or host.startswith("169.254.")
+        or host == "metadata.google.internal"
+        or (parsed.scheme == "http" and not local)
+    )
+    if invalid:
+        raise ProviderError(f"URL do {name} inválida")
+    return base if base.endswith("/v1") else f"{base}/v1"
+
+
+def config_warnings(env: dict | None = None) -> list[str]:
+    """Problemas de configuração visíveis no doctor, sem expor valores."""
+    env = os.environ if env is None else env
+    warnings: list[str] = []
+    hermes = env.get("HERMES_BASE_URL") or env.get("JARBAS_HERMES_BASE_URL")
+    if hermes:
+        try:
+            _chat_base_url(hermes)
+        except ProviderError:
+            warnings.append("URL do Hermes inválida: use HTTP(S) sem credenciais; fora de localhost, exija HTTPS.")
+    custom = env.get("JARBAS_CUSTOM_BASE_URL")
+    if custom:
+        if not env.get("JARBAS_CUSTOM_MODEL"):
+            warnings.append("O provedor personalizado tem URL, mas não tem modelo: foi ignorado.")
+        else:
+            try:
+                _chat_base_url(custom, "personalizado")
+            except ProviderError:
+                warnings.append("URL do provedor personalizado inválida: use HTTP(S) sem credenciais; fora de localhost, exija HTTPS.")
+    return warnings
+
+
 class Provider:
     name: str
     label: str
@@ -84,6 +175,32 @@ class Provider:
 
     def complete(self, system: str, messages: Sequence[ChatMessage], client: httpx.Client) -> ProviderReply:
         raise NotImplementedError
+
+    def probe(self, client: httpx.Client) -> ProbeResult:
+        return ProbeResult(self.name, self.label, False, False, 0, reason="provedor não suporta verificação")
+
+    @staticmethod
+    def _probe_result(
+        provider: "Provider", started: float, response: httpx.Response | None, error: str | None = None
+    ) -> ProbeResult:
+        latency = int((time.monotonic() - started) * 1000)
+        if error:
+            return ProbeResult(provider.name, provider.label, False, False, latency, reason=error)
+        status = response.status_code if response else None
+        if status is not None and 200 <= status < 400:
+            return ProbeResult(provider.name, provider.label, True, True, latency, status)
+        if status in (404, 405):
+            return ProbeResult(
+                provider.name, provider.label, True, True, latency, status,
+                "endpoint de modelos não existe; verificado apenas o alcance do servidor",
+            )
+        if status in (401, 403):
+            return ProbeResult(provider.name, provider.label, False, True, latency, status, "chave recusada pelo provedor")
+        if status == 429:
+            return ProbeResult(provider.name, provider.label, False, True, latency, status, "limite de requisições atingido")
+        if status is not None and status >= 500:
+            return ProbeResult(provider.name, provider.label, False, True, latency, status, "provedor fora do ar")
+        return ProbeResult(provider.name, provider.label, False, response is not None, latency, status, "falha ao consultar o provedor")
 
 
 @dataclass
@@ -120,6 +237,18 @@ class GeminiProvider(Provider):
         usage = data.get("usageMetadata") or {}
         return ProviderReply(text, self.model, _tokens(usage.get("promptTokenCount")), _tokens(usage.get("candidatesTokenCount")))
 
+    def probe(self, client: httpx.Client) -> ProbeResult:
+        started = time.monotonic()
+        try:
+            response = client.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={"x-goog-api-key": self.api_key},
+                timeout=PROBE_TIMEOUT,
+            )
+        except httpx.TransportError:
+            return self._probe_result(self, started, None, "falha de rede ou URL inalcançável")
+        return self._probe_result(self, started, response)
+
 
 @dataclass
 class OpenAICompatibleProvider(Provider):
@@ -147,14 +276,15 @@ class OpenAICompatibleProvider(Provider):
     def complete(self, system: str, messages: Sequence[ChatMessage], client: httpx.Client) -> ProviderReply:
         last: ProviderError | None = None
         for model in self.models:
-            timeout = PROVIDER_TIMEOUT
-            if self.deadline is not None:
-                timeout = min(timeout, self.deadline - time.monotonic())
-                if timeout < MIN_CALL_SECONDS:
-                    last = last or ProviderError("tempo total da pergunta esgotado")
-                    break
+            remaining = self.deadline - time.monotonic() if self.deadline is not None else PROVIDER_TIMEOUT
+            timeout = min(PROVIDER_TIMEOUT, remaining)
+            if timeout < MIN_CALL_SECONDS:
+                last = last or ProviderError("tempo total da pergunta esgotado")
+                break
+            # Só repete se ainda couberem duas chamadas no orçamento restante.
+            can_retry = remaining >= 2 * MIN_CALL_SECONDS + 1
             try:
-                return self._complete_with(model, system, messages, client, timeout)
+                return self._complete_with(model, system, messages, client, timeout, retry=can_retry)
             except ProviderError as error:
                 if error.fatal:
                     raise
@@ -166,7 +296,13 @@ class OpenAICompatibleProvider(Provider):
         raise last or ProviderError("nenhum modelo configurado")
 
     def _complete_with(
-        self, model: str, system: str, messages: Sequence[ChatMessage], client: httpx.Client, timeout: float = PROVIDER_TIMEOUT
+        self,
+        model: str,
+        system: str,
+        messages: Sequence[ChatMessage],
+        client: httpx.Client,
+        timeout: float = PROVIDER_TIMEOUT,
+        retry: bool = True,
     ) -> ProviderReply:
         body = {
             "model": model,
@@ -177,7 +313,14 @@ class OpenAICompatibleProvider(Provider):
             **self.extra_body,
         }
         headers = {"Authorization": f"Bearer {self.api_key}", **self.extra_headers}
-        response = client.post(f"{self.base_url.rstrip('/')}/chat/completions", json=body, headers=headers, timeout=timeout)
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
+        response = retry_request(
+            lambda: client.post(url, json=body, headers=headers, timeout=timeout),
+            attempts=RETRY_ATTEMPTS if retry else 1,
+            base_delay=RETRY_BASE_DELAY,
+            max_delay=RETRY_MAX_DELAY,
+            sleep=_retry_sleep,
+        )
         if response.status_code != 200:
             raise _classify(response)
         data = response.json()
@@ -194,6 +337,19 @@ class OpenAICompatibleProvider(Provider):
             text += TRUNCATED_NOTE
         usage = data.get("usage") or {}
         return ProviderReply(text, data.get("model") or model, _tokens(usage.get("prompt_tokens")), _tokens(usage.get("completion_tokens")))
+
+    def probe(self, client: httpx.Client) -> ProbeResult:
+        started = time.monotonic()
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        try:
+            response = client.get(
+                f"{self.base_url.rstrip('/')}/models",
+                headers=headers,
+                timeout=PROBE_TIMEOUT,
+            )
+        except httpx.TransportError:
+            return self._probe_result(self, started, None, "falha de rede ou URL inalcançável")
+        return self._probe_result(self, started, response)
 
 
 def providers_from_env(env: dict | None = None) -> list[Provider]:
@@ -225,17 +381,39 @@ def providers_from_env(env: dict | None = None) -> list[Provider]:
                 label="Groq",
             )
         )
-    # Ex.: um agente próprio exposto num endpoint compatível com a OpenAI.
-    if env.get("JARBAS_CUSTOM_BASE_URL") and env.get("JARBAS_CUSTOM_MODEL"):
-        found.append(
-            OpenAICompatibleProvider(
-                api_key=env.get("JARBAS_CUSTOM_API_KEY", ""),
-                model=env["JARBAS_CUSTOM_MODEL"],
-                base_url=env["JARBAS_CUSTOM_BASE_URL"],
-                name="custom",
-                label=env.get("JARBAS_CUSTOM_LABEL") or "Personalizado",
+    hermes_url = env.get("HERMES_BASE_URL") or env.get("JARBAS_HERMES_BASE_URL")
+    if hermes_url:
+        try:
+            hermes_base = _chat_base_url(hermes_url)
+        except ProviderError:
+            pass  # config_warnings() mostra o motivo no doctor; não derruba a API.
+        else:
+            found.append(
+                OpenAICompatibleProvider(
+                    api_key=env.get("HERMES_API_KEY") or env.get("JARBAS_HERMES_API_KEY") or env.get("JARBAS_CUSTOM_API_KEY", ""),
+                    model=env.get("JARBAS_HERMES_MODEL") or env.get("HERMES_MODEL") or HERMES_MODEL,
+                    base_url=hermes_base,
+                    name="hermes",
+                    label=env.get("HERMES_LABEL") or "Hermes",
+                )
             )
-        )
+    # Ex.: um agente próprio exposto num endpoint compatível com a OpenAI.
+    custom_url = env.get("JARBAS_CUSTOM_BASE_URL")
+    if custom_url and env.get("JARBAS_CUSTOM_MODEL"):
+        try:
+            custom_base = _chat_base_url(custom_url, "personalizado")
+        except ProviderError:
+            pass  # Mesma regra do Hermes: aviso no doctor, sem quebrar o app.
+        else:
+            found.append(
+                OpenAICompatibleProvider(
+                    api_key=env.get("JARBAS_CUSTOM_API_KEY", ""),
+                    model=env["JARBAS_CUSTOM_MODEL"],
+                    base_url=custom_base,
+                    name="custom",
+                    label=env.get("JARBAS_CUSTOM_LABEL") or "Personalizado",
+                )
+            )
     return found
 
 

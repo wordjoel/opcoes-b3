@@ -25,6 +25,7 @@ import httpx
 
 from core.clock import market_today
 from core.exceptions import DataInsufficientError
+from core.retry import retry_request
 from core.types import (
     CorporateEvent,
     ExerciseStyle,
@@ -180,7 +181,9 @@ class SelicRates:
     def load_range(self, start: date, end: date) -> None:
         params = {"formato": "json", "dataInicial": start.strftime("%d/%m/%Y"), "dataFinal": end.strftime("%d/%m/%Y")}
         try:
-            response = self._get(_SELIC_URL, params=params, headers=_HEADERS, timeout=_TIMEOUT_SECONDS)
+            response = retry_request(
+                lambda: self._get(_SELIC_URL, params=params, headers=_HEADERS, timeout=_TIMEOUT_SECONDS)
+            )
             response.raise_for_status()
             for item in response.json():
                 self._known[datetime.strptime(item["data"], "%d/%m/%Y").date()] = float(item["valor"]) / 100
@@ -215,7 +218,9 @@ class CotahistFiles:
                 return None
             url = _FILE_URL.format(stamp=f"D{day.strftime('%d%m%Y')}")
             try:
-                response = self._get(url, headers=_HEADERS, timeout=_TIMEOUT_SECONDS, follow_redirects=True)
+                response = retry_request(
+                    lambda: self._get(url, headers=_HEADERS, timeout=_TIMEOUT_SECONDS, follow_redirects=True)
+                )
             except httpx.HTTPError as error:
                 raise DataInsufficientError(f"B3 indisponível ({type(error).__name__})") from None
             if response.status_code == 404:

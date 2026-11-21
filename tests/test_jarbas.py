@@ -16,7 +16,9 @@ from app.jarbas.providers import (
     ChatMessage,
     GeminiProvider,
     OpenAICompatibleProvider,
+    ProviderError,
     ProviderManager,
+    config_warnings,
     providers_from_env,
 )
 from app.main import Settings, create_app
@@ -75,6 +77,96 @@ class TestProviders:
         found = providers_from_env({"GEMINI_API_KEY": "x", "JARBAS_GEMINI_MODEL": "gemini-outro"})
         assert found[0].model == "gemini-outro"
 
+    def test_hermes_is_configured_from_url_and_model(self):
+        found = providers_from_env(
+            {"HERMES_BASE_URL": "https://hermes.example/api/", "HERMES_MODEL": "agente-v1", "HERMES_API_KEY": "chave"}
+        )
+        assert [(p.name, p.label, p.base_url, p.model) for p in found] == [
+            ("hermes", "Hermes", "https://hermes.example/api/v1", "agente-v1")
+        ]
+
+    def test_hermes_url_already_with_v1_is_not_duplicated(self):
+        provider = providers_from_env({"HERMES_BASE_URL": "http://localhost:8000/v1"})[0]
+        assert provider.base_url == "http://localhost:8000/v1"
+
+    def test_hermes_answers_chat_completions(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request)
+            return openai_ok("Resposta do Hermes.")
+
+        provider = providers_from_env({"HERMES_BASE_URL": "https://hermes.example/v1"})[0]
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            reply = provider.complete("sistema", [ChatMessage("user", "Olá")], client)
+        assert reply.text == "Resposta do Hermes."
+        assert seen[0].url.path == "/v1/chat/completions"
+        assert json.loads(seen[0].content)["model"] == "hermes"
+
+    def test_retries_once_on_transient_error(self, monkeypatch):
+        monkeypatch.setattr("app.jarbas.providers._retry_sleep", lambda _: None)
+        seen = []
+
+        def handler(request):
+            seen.append(request)
+            return httpx.Response(503) if len(seen) == 1 else openai_ok("voltou")
+
+        provider = providers_from_env({"GROQ_API_KEY": "x"})[0]
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            reply = provider.complete("s", [ChatMessage("user", "Olá")], client)
+        assert reply.text == "voltou" and len(seen) == 2
+
+    def test_quota_and_bad_key_are_never_retried(self, monkeypatch):
+        monkeypatch.setattr("app.jarbas.providers._retry_sleep", lambda _: None)
+        for status in (401, 404, 429):
+            seen = []
+
+            def handler(request):
+                seen.append(request)
+                return httpx.Response(status)
+
+            provider = providers_from_env({"GROQ_API_KEY": "x"})[0]
+            with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+                with pytest.raises(ProviderError):
+                    provider.complete("s", [ChatMessage("user", "Olá")], client)
+            assert len(seen) == 1, status
+
+    def test_insecure_urls_are_skipped_and_warned(self):
+        env = {
+            "HERMES_BASE_URL": "http://hermes.example/v1",
+            "JARBAS_CUSTOM_BASE_URL": "https://custom.example/api/chat/completions",
+            "JARBAS_CUSTOM_MODEL": "m",
+        }
+        found = providers_from_env(env)
+        assert [(p.name, p.base_url) for p in found] == [("custom", "https://custom.example/api/v1")]
+        warnings = config_warnings(env)
+        assert any("Hermes inválida" in warning for warning in warnings)
+        assert all("hermes.example" not in warning for warning in warnings)
+
+    def test_metadata_address_is_refused(self):
+        assert providers_from_env({"HERMES_BASE_URL": "http://169.254.169.254/latest/v1"}) == []
+        assert config_warnings({"HERMES_BASE_URL": "http://169.254.169.254/latest/v1"})
+
+    def test_probe_is_sanitized(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request)
+            return httpx.Response(401)
+
+        provider = providers_from_env({"HERMES_BASE_URL": "https://hermes.example/v1", "HERMES_API_KEY": "segredo-123"})[0]
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            result = provider.probe(client).as_dict()
+        assert seen[0].url.path == "/v1/models"
+        assert result["http_status"] == 401 and result["ok"] is False and result["reachable"] is True
+        assert "segredo-123" not in str(result) and "hermes.example" not in str(result)
+
+    def test_probe_accepts_server_without_models_endpoint(self):
+        provider = providers_from_env({"HERMES_BASE_URL": "https://hermes.example/v1"})[0]
+        with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(404))) as client:
+            result = provider.probe(client).as_dict()
+        assert result["ok"] is True and result["reachable"] is True and "alcance" in result["reason"]
+
     def test_gemini_answers_first_with_key_in_header(self):
         router = Router(gemini=gemini_ok())
         result = ask(ProviderManager(all_providers()), router)
@@ -101,8 +193,11 @@ class TestProviders:
         router = Router(gemini=httpx.Response(500), groq=httpx.ConnectTimeout("t"), openrouter=openai_ok("Resposta do OpenRouter."))
         result = ask(ProviderManager(all_providers()), router)
         assert result.provider == "openrouter" and result.label == "OpenRouter"
-        assert router.requests[2].url.path == "/api/v1/chat/completions"
-        assert json.loads(router.requests[2].content)["model"].endswith(":free")
+        # O timeout do Groq rende uma repetição curta antes de cair para o OpenRouter.
+        assert len([r for r in router.requests if r.url.host == "api.groq.com"]) == 2
+        used = [r for r in router.requests if r.url.host == "openrouter.ai"][0]
+        assert used.url.path == "/api/v1/chat/completions"
+        assert json.loads(used.content)["model"].endswith(":free")
 
     def test_openrouter_tries_the_next_free_model(self):
         seen = []
@@ -333,6 +428,15 @@ class TestApi:
         sent = sent_prompt(router)
         assert "PETRL380" in sent and "Borboleta com call" in sent
 
+    def test_chat_exposes_latency_and_logs_only_allowlisted_fields(self, tmp_path, caplog):
+        client = make_client(tmp_path, Router(gemini=gemini_ok("Resposta sigilosa.")))
+        with caplog.at_level("INFO", logger="B3.API"):
+            body = chat(client, "Pergunta sigilosa com sk-chave-xyz").json()
+        assert body["latency_ms"] >= 0
+        logs = caplog.text
+        assert "jarbas chat ok=True" in logs and "provider=gemini" in logs
+        assert "Pergunta sigilosa" not in logs and "Resposta sigilosa" not in logs and "sk-chave-xyz" not in logs
+
     def test_fallback_through_the_api(self, tmp_path):
         client = make_client(tmp_path, Router(gemini=httpx.Response(429), groq=openai_ok("Pelo Groq.")))
         client.put("/api/jarbas/settings", json={**SETTINGS, "provider_order": ["gemini", "groq"]})
@@ -365,7 +469,7 @@ class TestApi:
         client = make_client(tmp_path)
         client.cookies.clear()
         for method, path in [("post", "/api/jarbas/chat"), ("get", "/api/jarbas/status"), ("get", "/api/jarbas/settings"),
-                             ("get", "/api/jarbas/models"), ("get", "/api/jarbas/conversations")]:
+                             ("get", "/api/jarbas/models"), ("get", "/api/jarbas/conversations"), ("get", "/api/jarbas/diagnose")]:
             assert getattr(client, method)(path, **({"json": {"question": "x"}} if method == "post" else {})).status_code == 401
 
     @pytest.mark.parametrize(
@@ -466,6 +570,34 @@ class TestSettingsAndModels:
         saved = client.put("/api/jarbas/settings", json={**SETTINGS, "voice_rate": 1.2, "speak_replies": False}).json()
         assert saved["voice_rate"] == 1.2 and saved["speak_replies"] is False and saved["updated_at"]
         assert client.get("/api/jarbas/status").json()["voice"]["speak_replies"] is False
+
+    def test_hermes_can_be_the_only_and_primary_provider(self, tmp_path):
+        client = make_client(tmp_path, env={"HERMES_BASE_URL": "http://hermes.local/v1"})
+        status = client.get("/api/jarbas/status").json()
+        assert status["available"] is True and status["providers"][0]["name"] == "hermes"
+        saved = client.put("/api/jarbas/settings", json={**SETTINGS, "provider_order": ["hermes"]}).json()
+        assert saved["provider_order"] == ["hermes"]
+        assert client.get("/api/jarbas/settings").json()["configured_providers"] == ["hermes"]
+
+    def test_diagnose_checks_each_provider_without_leaking_secrets(self, tmp_path, monkeypatch):
+        for name in ("HERMES_BASE_URL", "JARBAS_HERMES_BASE_URL", "JARBAS_CUSTOM_BASE_URL"):
+            monkeypatch.delenv(name, raising=False)
+        client = make_client(
+            tmp_path,
+            router=lambda _: httpx.Response(200, json={"data": []}),
+            env={"HERMES_BASE_URL": "https://hermes.example/v1", "HERMES_API_KEY": "segredo"},
+        )
+        report = client.get("/api/jarbas/diagnose").json()
+        assert report["ok"] is True and report["issues"] == []
+        assert report["providers"][0]["name"] == "hermes" and report["providers"][0]["ok"] is True
+        assert "segredo" not in json.dumps(report) and "hermes.example" not in json.dumps(report)
+
+    def test_diagnose_marks_bad_key_as_failure(self, tmp_path, monkeypatch):
+        for name in ("HERMES_BASE_URL", "JARBAS_HERMES_BASE_URL", "JARBAS_CUSTOM_BASE_URL"):
+            monkeypatch.delenv(name, raising=False)
+        client = make_client(tmp_path, router=lambda _: httpx.Response(401), env={"HERMES_BASE_URL": "https://hermes.example/v1"})
+        report = client.get("/api/jarbas/diagnose").json()
+        assert report["ok"] is False and report["providers"][0]["reason"] == "chave recusada pelo provedor"
 
     @pytest.mark.parametrize(
         "change",

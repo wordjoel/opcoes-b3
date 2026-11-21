@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { History, Mic, MicOff, Plus, Send, Settings, Square, Trash2, Volume2, VolumeX, X } from 'lucide-react';
-import { api, ApiError, JarbasSettings, JarbasStatus, useResource } from '../services/api';
+import { api, ApiError, JarbasDiagnosis, JarbasSettings, JarbasStatus, useResource } from '../services/api';
 import { cn, formatMoment } from '../lib/utils';
 import { startTour, stopTour, useJarbasState } from '../lib/jarbasStore';
 import { canListen, canSpeak, Listening, listen, portugueseVoices, secureContext, speak, unlockSpeech } from '../lib/voice';
@@ -10,6 +10,8 @@ interface Message {
   content: string;
   provider?: string | null;
   model?: string | null;
+  latency_ms?: number;
+  attempts?: { provider: string; error: string | null }[];
 }
 
 type View = 'chat' | 'history' | 'settings';
@@ -21,7 +23,7 @@ const SUGGESTIONS_GENERAL = ['Quais oportunidades merecem atenção hoje?', 'Qua
 // Perguntas de montagem disparam o destaque das pernas no gráfico.
 const ASSEMBLY = /mont|entrada|como fa[çc]o|pernas?|comprar|vender/i;
 const CONVERSATION_KEY = 'jarbas-conversa-id';
-const PROVIDER_LABEL: Record<string, string> = { openrouter: 'OpenRouter', gemini: 'Gemini', groq: 'Groq', custom: 'Personalizado' };
+const PROVIDER_LABEL: Record<string, string> = { openrouter: 'OpenRouter', gemini: 'Gemini', groq: 'Groq', custom: 'Personalizado', hermes: 'Hermes' };
 const ACTIVITY_LABEL: Record<Activity, string> = { idle: '', listening: 'Ouvindo...', thinking: 'Consultando e pensando...', speaking: 'Falando...' };
 
 function readKey(key: string): string | null {
@@ -43,7 +45,7 @@ function writeKey(key: string, value: string | null) {
 
 function JarbasAvatar({ active, activity = 'idle' }: { active: boolean; activity?: Activity }) {
   return (
-    <svg viewBox="0 0 40 40" className={cn('w-9 h-9 shrink-0', activity !== 'idle' && 'animate-pulse')} aria-hidden="true">
+    <svg viewBox="0 0 40 40" className={cn('w-9 h-9 shrink-0', activity !== 'idle' && 'motion-safe:animate-pulse')} aria-hidden="true">
       <circle cx="20" cy="20" r="19" style={{ fill: 'var(--dp-color-ink)' }} />
       <circle cx="20" cy="20" r="19" fill="none" style={{ stroke: activity === 'listening' ? 'var(--dp-color-accent)' : active ? 'var(--dp-color-gain)' : 'var(--dp-color-rule)' }} strokeWidth="2" />
       <text x="20" y="26" textAnchor="middle" fontSize="18" fontWeight="900" style={{ fill: 'var(--dp-color-ground)' }} fontFamily="serif">
@@ -109,7 +111,8 @@ export function Jarbas() {
     setActivity((current) => (current === 'speaking' ? 'idle' : current));
   };
 
-  const notice = (content: string) => setMessages((current) => [...current, { role: 'notice', content }]);
+  const notice = (content: string, attempts?: Message['attempts']) =>
+    setMessages((current) => [...current, { role: 'notice', content, attempts }]);
 
   const ask = async (question: string) => {
     const text = question.trim();
@@ -124,7 +127,17 @@ export function Jarbas() {
       const answer = await api.jarbasChat(text, conversationId, context);
       loadedConversation.current = answer.conversation_id;
       setConversationId(answer.conversation_id);
-      setMessages((current) => [...current, { role: 'assistant', content: answer.reply, provider: answer.provider, model: answer.model }]);
+      setMessages((current) => [
+        ...current,
+        {
+          role: 'assistant',
+          content: answer.reply,
+          provider: answer.provider,
+          model: answer.model,
+          latency_ms: answer.latency_ms,
+          attempts: answer.attempts,
+        },
+      ]);
       setLive((current) => (current ? { ...current, usage: { ...current.usage, questions: answer.usage.questions, daily_limit: answer.usage.daily_limit } } : current));
       if (audio && canSpeak()) {
         setActivity('speaking');
@@ -134,7 +147,8 @@ export function Jarbas() {
       }
     } catch (error) {
       stopTour();
-      notice((error as ApiError).message);
+      const failure = error as ApiError;
+      notice(failure.message, failure.attempts);
       setActivity('idle');
     }
   };
@@ -252,6 +266,11 @@ export function Jarbas() {
                 {usage.questions}/{usage.daily_limit} hoje
               </span>
             )}
+            {usage && usage.tokens > 0 && (
+              <span className="text-ink-2" title="Tokens consumidos e falhas de hoje (sem custo em reais)">
+                {usage.tokens} tokens{usage.failures ? ` · ${usage.failures} falhas` : ''}
+              </span>
+            )}
           </p>
 
           <div ref={list} className="flex-1 overflow-y-auto px-3 py-2 space-y-2 min-h-[140px]" aria-live="polite">
@@ -276,7 +295,20 @@ export function Jarbas() {
                   <p className="font-display text-[10px] text-ink-2 mt-0.5">
                     via {message.provider}
                     {message.model && ` · ${message.model}`}
+                    {message.latency_ms ? ` · ${message.latency_ms} ms` : ''}
                   </p>
+                )}
+                {message.attempts && message.attempts.length > 0 && (
+                  <details className="font-display text-[10px] text-ink-2 mt-0.5 text-left">
+                    <summary>Detalhes da consulta</summary>
+                    <ul>
+                      {message.attempts.map((attempt, index) => (
+                        <li key={`${attempt.provider}-${index}`}>
+                          {attempt.provider}: {attempt.error ?? 'resposta recebida'}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
                 )}
               </div>
             ))}
@@ -371,9 +403,18 @@ function SettingsView({ onSaved }: { onSaved: () => void }) {
   const [form, setForm] = useState<JarbasSettings | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const voices = portugueseVoices();
+  const [diagnosis, setDiagnosis] = useState<JarbasDiagnosis | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>(portugueseVoices());
 
   useEffect(() => setForm(settings.data), [settings.data]);
+  useEffect(() => {
+    if (!canSpeak() || typeof window.speechSynthesis.addEventListener !== 'function') return;
+    const update = () => setVoices(portugueseVoices());
+    window.speechSynthesis.addEventListener('voiceschanged', update);
+    update();
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', update);
+  }, []);
   if (!form) return <p className="np-note p-3">Carregando configurações...</p>;
 
   const set = <K extends keyof JarbasSettings>(key: K, value: JarbasSettings[K]) => setForm({ ...form, [key]: value });
@@ -382,6 +423,19 @@ function SettingsView({ onSaved }: { onSaved: () => void }) {
   const choosePrimary = (name: string) => set('provider_order', [name, ...form.provider_order.filter((item) => item !== name)]);
   const catalog = models.data?.models ?? [];
   const selected = catalog.find((model) => model.id === form.openrouter_model);
+
+  const testConnection = async () => {
+    setTesting(true);
+    setFailure(null);
+    try {
+      setDiagnosis(await api.jarbasDiagnose());
+      onSaved();
+    } catch (error) {
+      setFailure((error as ApiError).message);
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -401,7 +455,35 @@ function SettingsView({ onSaved }: { onSaved: () => void }) {
   return (
     <form onSubmit={save} className="flex-1 overflow-y-auto px-3 py-2 space-y-3">
       <h3 className="text-lg">Inteligência artificial</h3>
-      {configured.length === 0 && <p className="text-accent text-base">Nenhuma chave de IA no servidor. Configure OPENROUTER_API_KEY na Vercel.</p>}
+      {configured.length === 0 && <p className="text-accent text-base">Nenhum provedor de IA no servidor. Configure OPENROUTER_API_KEY, GEMINI_API_KEY, GROQ_API_KEY ou HERMES_BASE_URL com HERMES_MODEL na Vercel.</p>}
+      <div className="np-rule p-2 space-y-1">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="np-btn"
+            onClick={() => void testConnection()}
+            disabled={testing}
+            aria-label="Testar conexão dos provedores"
+          >
+            {testing ? 'Testando...' : 'Testar conexão'}
+          </button>
+          {diagnosis && <span role="status">{diagnosis.ok ? 'Conexão OK.' : 'Problemas encontrados.'}</span>}
+        </div>
+        {diagnosis && (
+          <ul className="font-display text-xs text-ink-2">
+            {diagnosis.providers.map((provider) => (
+              <li key={provider.name}>
+                {provider.label}: {provider.ok ? 'OK' : 'falhou'}
+                {provider.reason ? ` — ${provider.reason}` : ''}
+                {provider.latency_ms ? ` (${provider.latency_ms} ms)` : ''}
+              </li>
+            ))}
+            {diagnosis.issues.map((issue) => (
+              <li key={issue} className="text-accent">{issue}</li>
+            ))}
+          </ul>
+        )}
+      </div>
       {configured.length > 0 && (
         <label className="np-label block">
           Provedor principal

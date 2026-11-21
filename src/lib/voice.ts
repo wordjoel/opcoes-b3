@@ -130,17 +130,28 @@ export function speak(
   const { voice, male } = chosen ? { voice: chosen, male: true } : pickVoice(voices);
   const chunks = speakable(text).match(/[^.!?;:]+[.!?;:]*/g) ?? [];
   let cancelled = false;
-  chunks.forEach((chunk, index) => {
+  let index = 0;
+  // Enfileirar tudo de uma vez faz o Chrome cortar falas longas. Uma frase por vez,
+  // avançando no onend, é mais confiável e permite interromper no meio.
+  const speakNext = () => {
+    if (cancelled || index >= chunks.length) return;
+    const chunk = chunks[index];
+    index += 1;
     const utterance = new SpeechSynthesisUtterance(chunk.trim());
     utterance.lang = voice?.lang ?? 'pt-BR';
     if (voice) utterance.voice = voice;
     utterance.rate = options.rate ?? 1.02;
     // Sem voz masculina instalada, um tom mais grave aproxima o pedido.
     utterance.pitch = male ? 1 : 0.8;
-    if (index === 0) utterance.onstart = () => handlers.onStart?.();
-    if (index === chunks.length - 1) utterance.onend = () => !cancelled && handlers.onEnd?.();
+    if (index === 1) utterance.onstart = () => handlers.onStart?.();
+    utterance.onend = () => {
+      if (cancelled) return;
+      if (index >= chunks.length) handlers.onEnd?.();
+      else speakNext();
+    };
     synth.speak(utterance);
-  });
+  };
+  speakNext();
   if (chunks.length === 0) handlers.onEnd?.();
   return () => {
     cancelled = true;

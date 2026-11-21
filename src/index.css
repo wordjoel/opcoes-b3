@@ -28,6 +28,9 @@
   --dp-color-grid: #d9d4c8;
   --dp-color-gain: #2f6b3a;
   --dp-color-loss: #a3231d;
+  /* Cores próprias para os candles: mais vivas que os tokens de resultado, sem alterar o resto da UI. */
+  --dp-color-candle-up: #12803f;
+  --dp-color-candle-down: #cf3a2f;
   --dp-color-focus: #1f4e8c;
   --dp-color-hover: #e6e0d2;
   --dp-color-highlight: #dfe7f2;
@@ -56,6 +59,8 @@
     --dp-color-grid: #3a3832;
     --dp-color-gain: #7cc68b;
     --dp-color-loss: #e8675d;
+    --dp-color-candle-up: #4ade80;
+    --dp-color-candle-down: #ff6b63;
     --dp-color-focus: #8fb8ec;
     --dp-color-hover: #2a2822;
     --dp-color-highlight: #1f2b3d;
@@ -77,6 +82,8 @@
   --dp-color-grid: #3a3832;
   --dp-color-gain: #7cc68b;
   --dp-color-loss: #e8675d;
+  --dp-color-candle-up: #4ade80;
+  --dp-color-candle-down: #ff6b63;
   --dp-color-focus: #8fb8ec;
   --dp-color-hover: #2a2822;
   --dp-color-highlight: #1f2b3d;

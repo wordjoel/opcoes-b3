@@ -6,6 +6,8 @@ Rode em um terminal próprio, na pasta do projeto:
     .venv/Scripts/python -m scripts.configurar_vercel --producao (cadastra também em produção)
 
 Pede a senha do app e a chave da brapi só se ainda não estiverem em .env.turso.
+As chaves de IA e a URL do Hermes também são lidas de .env.turso e cadastradas
+nos mesmos ambientes: sem elas, o Jarbas fica indisponível.
 """
 
 import secrets
@@ -28,6 +30,21 @@ VARIABLES = (
     "SESSION_SECRET",
     "CRON_SECRET",
     "BRAPI_API_KEY",
+    # Jarbas IA: basta uma chave, mas o Hermes precisa também da URL e do modelo.
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+    "JARBAS_OPENROUTER_MODEL",
+    "JARBAS_GEMINI_MODEL",
+    "JARBAS_GROQ_MODEL",
+    "HERMES_BASE_URL",
+    "HERMES_API_KEY",
+    "HERMES_MODEL",
+    "JARBAS_HERMES_MODEL",
+    "JARBAS_CUSTOM_BASE_URL",
+    "JARBAS_CUSTOM_API_KEY",
+    "JARBAS_CUSTOM_MODEL",
+    "JARBAS_CUSTOM_LABEL",
 )
 
 

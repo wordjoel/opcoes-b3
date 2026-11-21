@@ -53,6 +53,21 @@ def test_no_key_is_explained():
     assert "sem chave" in brapi_status(None)
 
 
-@pytest.mark.parametrize("name", ["APP_PASSWORD_HASH", "SESSION_SECRET", "CRON_SECRET", "BRAPI_API_KEY", "TURSO_AUTH_TOKEN"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "APP_PASSWORD_HASH",
+        "SESSION_SECRET",
+        "CRON_SECRET",
+        "BRAPI_API_KEY",
+        "TURSO_AUTH_TOKEN",
+        "OPENROUTER_API_KEY",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "HERMES_BASE_URL",
+        "HERMES_MODEL",
+        "JARBAS_CUSTOM_BASE_URL",
+    ],
+)
 def test_all_required_variables_are_covered(name):
     assert name in VARIABLES

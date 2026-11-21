@@ -9,6 +9,8 @@ export class ApiError extends Error {
     /** "DADOS INSUFICIENTES" quando os dados não permitem concluir. */
     readonly label?: string,
     readonly reasons: string[] = [],
+    /** Provedores tentados e o motivo sanitizado de cada falha. */
+    readonly attempts: { provider: string; error: string | null }[] = [],
   ) {
     super(message);
   }
@@ -40,12 +42,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         : typeof body?.detail?.message === 'string'
           ? body.detail.message
           : `Erro ${response.status} no servidor.`;
-    throw new ApiError(response.status, detail, body?.label, body?.reasons ?? []);
+    throw new ApiError(response.status, detail, body?.label, body?.reasons ?? [], body?.detail?.attempts ?? []);
   }
   return body as T;
 }
 
 const post = (body?: unknown): RequestInit => ({ method: 'POST', body: body ? JSON.stringify(body) : undefined });
+
+export interface JarbasUsageModel {
+  provider: string;
+  model: string;
+  requests: number;
+  failures: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
 
 export interface JarbasUsage {
   day: string;
@@ -54,6 +65,7 @@ export interface JarbasUsage {
   failures: number;
   tokens: number;
   daily_limit: number;
+  models?: JarbasUsageModel[];
 }
 
 export interface JarbasStatus {
@@ -67,6 +79,7 @@ export interface JarbasReply {
   reply: string;
   provider: string;
   model: string;
+  latency_ms?: number;
   attempts: { provider: string; error: string | null }[];
   conversation_id: string;
   tools: string[];
@@ -93,6 +106,20 @@ export interface JarbasModel {
   free: boolean;
   prompt_per_million: number | null;
   completion_per_million: number | null;
+}
+
+export interface JarbasDiagnosis {
+  ok: boolean;
+  providers: {
+    name: string;
+    label: string;
+    ok: boolean;
+    reachable: boolean;
+    latency_ms: number;
+    http_status: number | null;
+    reason: string | null;
+  }[];
+  issues: string[];
 }
 
 export interface JarbasConversation {
@@ -158,6 +185,7 @@ export const api = {
   chain: (symbol: string, expiry: string) =>
     request<ChainView>(`/assets/${encodeURIComponent(symbol)}/chain?expiry=${expiry}`),
   jarbasStatus: () => request<JarbasStatus>('/jarbas/status'),
+  jarbasDiagnose: () => request<JarbasDiagnosis>('/jarbas/diagnose'),
   jarbasChat: (question: string, conversationId: string | null, context: JarbasContext | null) =>
     request<JarbasReply>('/jarbas/chat', post({ question, conversation_id: conversationId ?? undefined, context })),
   jarbasSettings: () => request<JarbasSettings>('/jarbas/settings'),

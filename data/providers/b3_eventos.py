@@ -24,6 +24,7 @@ import httpx
 
 from core.calendario_b3 import next_trading_day
 from core.exceptions import DataInsufficientError
+from core.retry import retry_request
 from core.types import PriceBar
 
 _URL = "https://sistemaswebb3-listados.b3.com.br/listedCompaniesProxy/CompanyCall/GetListedSupplementCompany/"
@@ -119,7 +120,9 @@ class B3CorporateActions:
                 raise DataInsufficientError(f"B3 sem eventos de {issuer} (falha recente)")
         query = base64.b64encode(json.dumps({"issuingCompany": issuer, "language": "pt-br"}).encode()).decode()
         try:
-            response = self._get(_URL + query, headers=_HEADERS, timeout=_TIMEOUT_SECONDS)
+            response = retry_request(
+                lambda: self._get(_URL + query, headers=_HEADERS, timeout=_TIMEOUT_SECONDS)
+            )
             response.raise_for_status()
             parsed = parse_company(response.json())
         except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as error:

@@ -16,4 +16,19 @@ export default defineConfig({
       '/api': 'http://127.0.0.1:8000',
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Separa as bibliotecas grandes para que uma mudança na interface não
+        // invalide todo o bundle baixado pelo navegador.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (/node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'react-vendor';
+          if (/node_modules[\\/](lightweight-charts)[\\/]/.test(id)) return 'price-charts';
+          if (/node_modules[\\/](recharts|d3-|victory-vendor)/.test(id)) return 'charts';
+          if (/node_modules[\\/](lucide-react)[\\/]/.test(id)) return 'icons';
+        },
+      },
+    },
+  },
 });
