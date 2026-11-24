@@ -29,7 +29,7 @@ Em dois terminais:
 npm run dev
 ```
 
-Abra http://127.0.0.1:3000. Sem `BRAPI_API_KEY`, só a PETR4 tem grade de opções.
+Abra http://127.0.0.1:3000. Sem `BRAPI_API_KEY`, a grade vem do COTAHIST oficial da B3 para os ativos com opções negociadas no último pregão; a chave da brapi acrescenta contratos em aberto e cotações mais recentes.
 
 ## Testes
 

@@ -3,12 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { CSSProperties } from 'react';
+import { lazy, Suspense, type CSSProperties } from 'react';
 import { api, useResource } from '../services/api';
 import { ScannerRow } from '../types';
 import { formatChange, formatCurrency, formatRatio, REGIME_LABEL, TREND_LABEL } from '../lib/utils';
 import { DataStatusBadge, ErrorNotice, Loading, Signed, Stat } from './Common';
-import { HvChart, PriceChart } from './PriceChart';
+
+// As bibliotecas de gráfico ficam fora do carregamento inicial da tela.
+const PriceChart = lazy(() => import('./PriceChart').then((module) => ({ default: module.PriceChart })));
+const HvChart = lazy(() => import('./PriceChart').then((module) => ({ default: module.HvChart })));
 
 interface DashboardProps {
   rows: ScannerRow[];
@@ -62,10 +65,10 @@ export function Dashboard({ rows, selected, onSelect, onOpenStrategies }: Dashbo
                   </p>
                 ))}
               {asset.data.history.length > 0 ? (
-                <>
+                <Suspense fallback={<Loading label="Carregando gráficos..." />}>
                   <PriceChart bars={asset.data.history} structure={asset.data.structure} />
                   <HvChart bars={asset.data.history} />
-                </>
+                </Suspense>
               ) : (
                 <p className="text-accent">DADOS INSUFICIENTES: histórico recusado na validação.</p>
               )}

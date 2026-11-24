@@ -90,7 +90,7 @@ def prepare(
 def brapi_status(key: str | None) -> str:
     """Testa com um ativo fora do acesso livre: só responde 200 se a chave incluir opções."""
     if not key:
-        return "sem chave: só a PETR4 terá opções"
+        return "sem chave: grade pelo COTAHIST oficial, sem contratos em aberto"
     try:
         expirations = httpx.get(
             "https://brapi.dev/api/v2/options/expirations",
