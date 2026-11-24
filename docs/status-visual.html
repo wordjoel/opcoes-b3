@@ -194,6 +194,7 @@ a { color: var(--accent); }
     <section class="card">
       <h2>Linha do tempo recente</h2>
       <ol class="timeline" style="margin-top:14px">
+        <li><div class="t">Publicação em produção e segredos cadastrados</div><div class="d mono">24/11</div></li>
         <li><div class="t">Hermes, diagnóstico do Jarbas, candles e CI</div><div class="d mono">147c2b7 · 21/11</div></li>
         <li><div class="t">Interface: modo claro e escuro</div><div class="d mono">b95fb2d · 11/11</div></li>
         <li><div class="t">Interface: leitura de números pt-BR e tema</div><div class="d mono">f3dd625 a 3f51f89 · 11/11</div></li>
@@ -209,8 +210,8 @@ a { color: var(--accent); }
   <section class="card">
     <h2>Próximos passos</h2>
     <ol class="steps" style="margin-top:14px">
-      <li><div><div class="t">Publicar a versão nova em produção</div><div class="d">O alias b3-opcoes-pro.vercel.app ainda aponta para o deploy de 03/11. Cadastrar os segredos em produção e rodar npx vercel deploy --prod.</div></div></li>
-      <li><div><div class="t">Confirmar o Jarbas no site publicado</div><div class="d">Depois do deploy, GET /api/jarbas/status deve devolver available: true; o botão Testar conexão mostra o diagnóstico sem gasto de modelo.</div></div></li>
+      <li><div><div class="t">Usar a versão publicada</div><div class="d">Feito em 24/11: segredos cadastrados em produção, deploy publicado e Jarbas confirmado como disponível. Abra b3-opcoes-pro.vercel.app e entre com a senha.</div></div></li>
+      <li><div><div class="t">Conferir o diagnóstico do Jarbas</div><div class="d">Em Configurações do Jarbas, Testar conexão mostra o provedor e a latência sem gastar chamada de modelo.</div></div></li>
       <li><div><div class="t">Definir fonte de contratos em aberto</div><div class="d">Sem ela, a liquidez segue como não medida.</div></div></li>
       <li><div><div class="t">Conferir segredos no bundle</div><div class="d">A auditoria de 02/11 apontou exposição da chave do Gemini. O código atual mantém as chaves só no servidor; confirmar no build com code-split.</div></div></li>
       <li><div><div class="t">Ampliar o histórico do Laboratório</div><div class="d">Hoje só o COTAHIST. Sem histórico de opções, o ranking continua parcial.</div></div></li>
@@ -232,7 +233,7 @@ a { color: var(--accent); }
     </div>
   </section>
 
-  <footer>Fonte: git local, docs/ e Vercel CLI. Suíte executada em 24/11/2026: 616 testes Python, 81 testes Vitest, tsc e build sem erros.</footer>
+  <footer>Fonte: git local, docs/ e Vercel CLI. Suíte executada em 24/11/2026: 616 testes Python, 81 testes Vitest, tsc e build sem erros. Produção: build novo e Jarbas disponível via OpenRouter.</footer>
 </main>
 </body>
 </html>
