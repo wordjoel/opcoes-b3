@@ -11,6 +11,8 @@ Convenções e limitações: `docs/quant-convencoes.md`.
 
 Carteira, gestor de risco, supervisor e registro de decisões: `docs/agentes-estado.md`.
 
+Status visual do projeto (abra no navegador): [docs/status-visual.html](docs/status-visual.html). Versão publicada: https://claude.ai/artifact/AGs4pRu86gzBAscRmCojnv
+
 ## Rodar localmente
 
 Na primeira vez, gere a senha e copie as duas linhas para `.env.turso` (modelo em `.env.example`), junto com `B3_INSECURE_COOKIE=1`:

@@ -1,6 +1,8 @@
 # Estado dos agentes e do barramento
 
-Atualizado em 07/11/2026. A auditoria anterior, de 03/11/2026, mantinha os módulos isolados até que três condições fossem cumpridas.
+Atualizado em 24/11/2026. A auditoria anterior, de 03/11/2026, mantinha os módulos isolados até que três condições fossem cumpridas.
+
+Na atualização de 21/11 (`147c2b7`) entrou o Jarbas com provedor Hermes e diagnóstico de conexão. Ele **explica**, não decide: as ferramentas disponíveis ao assistente são somente leitura e os números exibidos continuam vindo do motor determinístico. As chaves ficam no servidor; o diagnóstico devolve só `ok`, `reachable`, status HTTP e latência, sem URL, chave ou cabeçalho. Falhas transitórias rendem uma repetição curta; erros de autenticação ou cota não são repetidos. O CI (`.github/workflows/ci.yml`) roda pytest, checagem de tipos, Vitest e build.
 
 | Módulo | Situação | Usado pelo app? |
 |---|---|---|

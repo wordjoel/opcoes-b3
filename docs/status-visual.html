@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>B3 Opções Pro · Status</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: cabeçalho com resumo, depois grade de módulos, depois pendências em coluna. */
+:root {
+  --bg: #f5f6f3;
+  --surface: #ffffff;
+  --line: #dfe3dc;
+  --fg: #17201c;
+  --muted: #5d6a63;
+  --accent: #0f7a6a;
+  --ok: #17794a;
+  --ok-bg: #e2f3ea;
+  --warn: #9a6200;
+  --warn-bg: #fbefd6;
+  --bad: #a3322a;
+  --bad-bg: #f8e1de;
+  --info: #2c5d8f;
+  --info-bg: #e1ecf7;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1412;
+    --surface: #161e1b;
+    --line: #2a3632;
+    --fg: #e6ede9;
+    --muted: #9bada4;
+    --accent: #41c3ae;
+    --ok: #6fd39a;
+    --ok-bg: #173325;
+    --warn: #f0be5c;
+    --warn-bg: #3a2d12;
+    --bad: #f08a80;
+    --bad-bg: #3a1c19;
+    --info: #8cb8e6;
+    --info-bg: #1a2a3b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1412;
+  --surface: #161e1b;
+  --line: #2a3632;
+  --fg: #e6ede9;
+  --muted: #9bada4;
+  --accent: #41c3ae;
+  --ok: #6fd39a;
+  --ok-bg: #173325;
+  --warn: #f0be5c;
+  --warn-bg: #3a2d12;
+  --bad: #f08a80;
+  --bad-bg: #3a1c19;
+  --info: #8cb8e6;
+  --info-bg: #1a2a3b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 20px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(24px, 4vw, 34px); letter-spacing: -0.02em; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.mono { font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; font-size: 12.5px; }
+.muted { color: var(--muted); }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px;
+  min-width: 0;
+}
+.head { display: grid; gap: 10px; }
+.head p { margin: 0; color: var(--muted); max-width: 70ch; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.kpi { display: grid; gap: 4px; }
+.kpi .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--muted); font-size: 13px; }
+.pill {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.ok { background: var(--ok-bg); color: var(--ok); }
+.warn { background: var(--warn-bg); color: var(--warn); }
+.bad { background: var(--bad-bg); color: var(--bad); }
+.info { background: var(--info-bg); color: var(--info); }
+.grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
+@media (min-width: 820px) { .grid2 { grid-template-columns: 1.4fr 1fr; } }
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.list li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px;
+  padding: 12px 0; border-top: 1px solid var(--line); min-width: 0;
+}
+.list li:first-child { border-top: 0; padding-top: 4px; }
+.list .name { font-weight: 600; }
+.list .note { grid-column: 1 / -1; color: var(--muted); font-size: 13.5px; }
+.bar { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; display: flex; }
+.bar span { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); margin-top: 10px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.timeline { list-style: none; margin: 0; padding: 0 0 0 18px; position: relative; display: grid; gap: 12px; }
+.timeline::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+.timeline li { position: relative; min-width: 0; }
+.timeline li::before {
+  content: ""; position: absolute; left: -18px; top: 6px; width: 12px; height: 12px;
+  border-radius: 50%; background: var(--surface); border: 2px solid var(--accent);
+}
+.timeline .t { font-size: 14px; overflow-wrap: anywhere; }
+.timeline .d { font-size: 12.5px; color: var(--muted); }
+.steps { counter-reset: s; list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; }
+.steps li::before {
+  counter-increment: s; content: counter(s);
+  width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+  background: var(--info-bg); color: var(--info); font-weight: 700; font-size: 13px;
+}
+.steps .t { font-weight: 600; }
+.steps .d { color: var(--muted); font-size: 13.5px; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.06em; border-top: 0; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+footer { color: var(--muted); font-size: 12.5px; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main class="wrap">
+
+  <header class="card head">
+    <h2>Status do projeto</h2>
+    <h1>B3 Opções Pro</h1>
+    <p>Análise de opções da B3 para uso pessoal. Só análise: não existe envio de ordens. Atualizado em 24/11/2026.</p>
+    <div class="legend" style="margin-top:0">
+      <span><span class="pill ok">Pronto</span></span>
+      <span><span class="pill info">Em andamento</span></span>
+      <span><span class="pill warn">Limitado</span></span>
+      <span><span class="pill bad">Bloqueado</span></span>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="kpis">
+      <div class="kpi"><span class="v">0</span><span class="l">arquivos alterados (árvore limpa)</span></div>
+      <div class="kpi"><span class="v">0</span><span class="l">commits locais ainda não enviados ao remoto</span></div>
+      <div class="kpi"><span class="v">0</span><span class="l">commits atrás de origin/main</span></div>
+      <div class="kpi"><span class="v">158</span><span class="l">arquivos versionados</span></div>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Módulos</h2>
+      <ul class="list" style="margin-top:8px">
+        <li><span class="name">Interface PWA (React)</span><span class="pill ok">Pronto</span>
+          <span class="note">Layout, tema claro e escuro, leitura de números em pt-BR, candles verdes/vermelhos e zoom inicial. Code-split do build.</span></li>
+        <li><span class="name">API FastAPI com login</span><span class="pill ok">Pronto</span>
+          <span class="note">Rotas de análise, carteira e registro de decisões.</span></li>
+        <li><span class="name">Motor quantitativo</span><span class="pill ok">Pronto</span>
+          <span class="note">Black-Scholes, gregas, payoff, custos, volatilidade e regime.</span></li>
+        <li><span class="name">Fonte de dados B3 (COTAHIST)</span><span class="pill ok">Pronto</span>
+          <span class="note">Grátis e oficial. Histórico ajustado por proventos.</span></li>
+        <li><span class="name">Carteira e decisões</span><span class="pill ok">Pronto</span>
+          <span class="note">Persistidas em Turso. Lançamento errado é anulado, nunca apagado.</span></li>
+        <li><span class="name">Jarbas IA e Hermes</span><span class="pill info">Em andamento</span>
+          <span class="note">Provedor Hermes, diagnóstico sem custo de modelo, evals determinísticos e retry curto. Depende de chave configurada no servidor.</span></li>
+        <li><span class="name">Laboratório de estratégias</span><span class="pill info">Em andamento</span>
+          <span class="note">Varredura, backtest e monitor existem. Ranking depende de histórico suficiente.</span></li>
+        <li><span class="name">Contratos em aberto</span><span class="pill bad">Bloqueado</span>
+          <span class="note">Sem fonte gratuita. Sem eles, nenhuma estrutura sai como APROVADA por liquidez.</span></li>
+        <li><span class="name">Cotação em tempo real</span><span class="pill warn">Limitado</span>
+          <span class="note">Depende de contrato com a B3 ou distribuidor. Hoje: fechamento do dia.</span></li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Linha do tempo recente</h2>
+      <ol class="timeline" style="margin-top:14px">
+        <li><div class="t">Hermes, diagnóstico do Jarbas, candles e CI</div><div class="d mono">147c2b7 · 21/11</div></li>
+        <li><div class="t">Interface: modo claro e escuro</div><div class="d mono">b95fb2d · 11/11</div></li>
+        <li><div class="t">Interface: leitura de números pt-BR e tema</div><div class="d mono">f3dd625 a 3f51f89 · 11/11</div></li>
+        <li><div class="t">Calendário de pregões da B3</div><div class="d mono">1d87610 · 07/11</div></li>
+        <li><div class="t">Custos operacionais no resultado</div><div class="d mono">1df24a1 · 07/11</div></li>
+        <li><div class="t">Carteira persistida e registro de decisões</div><div class="d mono">7bba693 · 07/11</div></li>
+        <li><div class="t">Travas mais rentáveis, mapa e Jarbas IA</div><div class="d mono">522eec8 · 07/11</div></li>
+        <li><div class="t">Fonte oficial e gratuita da B3</div><div class="d mono">4d4c293 · 03/11</div></li>
+      </ol>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Próximos passos</h2>
+    <ol class="steps" style="margin-top:14px">
+      <li><div><div class="t">Publicar a versão nova em produção</div><div class="d">O alias b3-opcoes-pro.vercel.app ainda aponta para o deploy de 03/11. Cadastrar os segredos em produção e rodar npx vercel deploy --prod.</div></div></li>
+      <li><div><div class="t">Confirmar o Jarbas no site publicado</div><div class="d">Depois do deploy, GET /api/jarbas/status deve devolver available: true; o botão Testar conexão mostra o diagnóstico sem gasto de modelo.</div></div></li>
+      <li><div><div class="t">Definir fonte de contratos em aberto</div><div class="d">Sem ela, a liquidez segue como não medida.</div></div></li>
+      <li><div><div class="t">Conferir segredos no bundle</div><div class="d">A auditoria de 02/11 apontou exposição da chave do Gemini. O código atual mantém as chaves só no servidor; confirmar no build com code-split.</div></div></li>
+      <li><div><div class="t">Ampliar o histórico do Laboratório</div><div class="d">Hoje só o COTAHIST. Sem histórico de opções, o ranking continua parcial.</div></div></li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>Riscos de integração</h2>
+    <div class="table-wrap" style="margin-top:8px">
+      <table>
+        <thead><tr><th>Risco</th><th>Impacto</th><th>Situação</th></tr></thead>
+        <tbody>
+          <tr><td>Dados com atraso</td><td>Bid e ask defasados invalidam travas</td><td><span class="pill warn">Mitigado</span> idade do dado exibida</td></tr>
+          <tr><td>Licença de dados da B3</td><td>Tempo real exige contrato</td><td><span class="pill warn">Aberto</span></td></tr>
+          <tr><td>Histórico de opções</td><td>Backtest sem dados perde validade</td><td><span class="pill info">Parcial</span> só o COTAHIST</td></tr>
+          <tr><td>Execução de cenário</td><td>Preço real de execução não medido</td><td><span class="pill info">Documentado</span> limites conservador e otimista</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>Fonte: git local, docs/ e Vercel CLI. Suíte executada em 24/11/2026: 616 testes Python, 81 testes Vitest, tsc e build sem erros.</footer>
+</main>
+</body>
+</html>
