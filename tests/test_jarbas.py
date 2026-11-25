@@ -520,6 +520,42 @@ class TestHistory:
         assert [m["role"] for m in detail["messages"]] == ["user", "assistant", "user", "assistant"]
         assert detail["messages"][1]["provider"] == "Gemini"
 
+    def test_agent_metadata_is_persisted_and_returned_on_reopen(self, tmp_path):
+        client = make_client(tmp_path)
+        answer = chat(client, "Qual é o risco dessa proteção?").json()
+        detail = client.get(f"/api/jarbas/conversations/{answer['conversation_id']}").json()
+        stored = detail["messages"][1]
+
+        # Metadados aditivos: o mesmo conteúdo devolvido no chat volta ao reabrir.
+        assert stored["specialists"] == answer["specialists"]
+        assert stored["plan"] == answer["plan"]
+        assert stored["tool_details"] == answer["tool_details"]
+        assert stored["tools"] == answer["tools"]
+        assert answer["specialists"] and answer["plan"]
+        # Contrato antigo intacto.
+        for key in ("role", "content", "provider", "model", "created_at"):
+            assert key in stored
+        for key in ("reply", "provider", "model", "attempts", "conversation_id", "tools", "usage"):
+            assert key in answer
+
+    def test_legacy_and_invalid_tools_json_are_read_defensively(self, tmp_path):
+        client = make_client(tmp_path)
+        identity = chat(client).json()["conversation_id"]
+        path = f"/api/jarbas/conversations/{identity}"
+        client.db.run(
+            "UPDATE jarbas_messages SET tools_json = ? WHERE conversation_id = ? AND role = 'assistant'",
+            (json.dumps(["ferramenta_antiga"]), identity),
+        )
+        old = client.get(path).json()["messages"][1]
+        assert old["tools"] == ["ferramenta_antiga"]
+        assert "specialists" not in old and "plan" not in old
+
+        client.db.run(
+            "UPDATE jarbas_messages SET tools_json = ? WHERE conversation_id = ? AND role = 'assistant'",
+            ("{json corrompido", identity),
+        )
+        assert client.get(path).status_code == 200
+
     def test_history_survives_another_instance(self, tmp_path):
         client = make_client(tmp_path)
         identity = chat(client).json()["conversation_id"]

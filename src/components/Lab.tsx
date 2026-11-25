@@ -1,11 +1,10 @@
-import { PALETA } from '../lib/tema';
 import { FormEvent, useState } from 'react';
-import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, useResource } from '../services/api';
 import { LabOpportunity, LabRankingRow, LabStrategy, Regime } from '../types';
 import { formatCurrency, formatDay, formatLimit, formatNumber, formatRatio, REGIME_LABEL } from '../lib/utils';
 import { parseNumeroBR } from '../lib/numero';
 import { ErrorNotice, Loading, Panel, Signed } from './Common';
+import { PayoffAnimation, type PayoffPoint } from './PayoffAnimation';
 
 const PERIODS = [1, 3, 5, 10, 15, 30];
 type Section = 'oportunidades' | 'acompanhamento' | 'backtest' | 'ranking';
@@ -539,7 +538,13 @@ function StrategyDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const item = data.data;
   if (!item) return null;
   const measuredName = item.returns.measured_label === 'SIMULADO' ? 'Retorno simulado' : 'Retorno observado';
-  const curve = (item.marks ?? []).filter((mark) => mark.complete);
+  // Um pregão sem resultado calculado não é zero: fica fora da curva, sem inventar prejuízo.
+  const curve = (item.marks ?? []).reduce<PayoffPoint[]>((points, mark) => {
+    if (mark.complete && typeof mark.pnl_brl === 'number' && Number.isFinite(mark.pnl_brl)) {
+      points.push({ day: mark.day, pnl: mark.pnl_brl });
+    }
+    return points;
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -583,24 +588,10 @@ function StrategyDetail({ id, onBack }: { id: string; onBack: () => void }) {
         {curve.length === 0 ? (
           <p>Ainda não há marcação completa. Sem preço de todas as pernas no pregão, nenhum resultado é calculado.</p>
         ) : (
-          <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={curve} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
-                <CartesianGrid stroke={PALETA.GRID} vertical={false} />
-                <XAxis dataKey="day" stroke={PALETA.SECONDARY} fontSize={12} tickLine={false} axisLine={false} tickFormatter={(day: string) => formatDay(day).slice(0, 5)} />
-                <YAxis stroke={PALETA.SECONDARY} fontSize={12} tickLine={false} axisLine={false} width={64} />
-                <ReferenceLine y={0} stroke={PALETA.SECONDARY} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: PALETA.PAPER, border: `1px solid ${PALETA.INK}`, borderRadius: 0 }}
-                  labelStyle={{ color: PALETA.SECONDARY }}
-                  itemStyle={{ color: PALETA.INK }}
-                  labelFormatter={(day) => formatDay(String(day))}
-                  formatter={(value) => [formatCurrency(Number(value)), 'Resultado']}
-                />
-                <Line type="linear" dataKey="pnl_brl" stroke={PALETA.INK} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          <PayoffAnimation
+            points={curve}
+            description="A animação revela, pregão a pregão, o resultado hipotético calculado com os preços reais de fechamento. Nenhuma ordem foi enviada."
+          />
         )}
       </Panel>
       <Panel title="Pernas e preços usados" className="overflow-x-auto">

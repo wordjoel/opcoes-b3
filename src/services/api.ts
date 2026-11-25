@@ -138,6 +138,10 @@ export interface JarbasReply {
   attempts: { provider: string; error: string | null }[];
   conversation_id: string;
   tools: string[];
+  /** Metadados do orquestrador multi-agente; ausentes em respostas antigas. */
+  specialists?: string[];
+  plan?: string[];
+  tool_details?: { name: string; ok: boolean; attempts: string[] }[];
   usage: { questions: number; daily_limit: number };
 }
 
@@ -183,6 +187,18 @@ export interface JarbasConversation {
   created_at: string;
   updated_at: string;
   messages?: unknown;
+}
+
+/** Mensagem guardada no histórico. Os metadados são aditivos: conversas antigas não os têm. */
+export interface JarbasStoredMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  provider: string | null;
+  model: string | null;
+  created_at: string;
+  specialists?: string[];
+  plan?: string[];
+  tool_details?: { name: string; ok: boolean; attempts: string[] }[];
 }
 
 export const api = {
@@ -248,9 +264,7 @@ export const api = {
   jarbasModels: () => request<{ configured: boolean; models: JarbasModel[]; chain: string[] }>('/jarbas/models'),
   jarbasConversations: () => request<{ conversations: JarbasConversation[] }>('/jarbas/conversations'),
   jarbasConversation: (id: string) =>
-    request<JarbasConversation & { messages: { role: 'user' | 'assistant'; content: string; provider: string | null; model: string | null; created_at: string }[] }>(
-      `/jarbas/conversations/${id}`,
-    ),
+    request<JarbasConversation & { messages: JarbasStoredMessage[] }>(`/jarbas/conversations/${id}`),
   deleteJarbasConversation: (id: string) => request<{ deleted: boolean }>(`/jarbas/conversations/${id}`, { method: 'DELETE' }),
   calendars: (symbol: string, near: string, far: string) =>
     checked<CalendarsView>(`/assets/${encodeURIComponent(symbol)}/calendars?near=${near}&far=${far}`),

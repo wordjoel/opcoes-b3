@@ -1,5 +1,7 @@
 """API do B3 Opções Pro. Só leitura e análise: não existe rota de envio de ordens."""
 
+import base64
+import binascii
 import hmac
 import logging
 import os
@@ -18,9 +20,13 @@ from collections import deque
 import httpx
 
 from app import auth, carteira, contracts, lab, service
-from app.jarbas import catalog as jarbas_catalog, store as jarbas_store, tools as jarbas_tools
-from app.jarbas.assistant import MAX_MESSAGE_CHARS, StrategyContext, recent_turns, system_prompt
+from app.agents.memory_manager import MemoryManager
+from app.agents.orchestrator import Orchestrator
+from app.jarbas import catalog as jarbas_catalog, store as jarbas_store
+from app.jarbas.assistant import MAX_MESSAGE_CHARS, StrategyContext
 from app.jarbas.providers import AllProvidersFailed, ChatMessage, ProviderManager, config_warnings, providers_from_env
+from app.rag.ingest import ingest_bytes
+from app.rag.retriever import build_context, retrieve
 from app.cache import CachingProvider
 from core.clock import market_today
 from core.config import load_local_env
@@ -90,6 +96,12 @@ class JarbasRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
     conversation_id: str | None = Field(default=None, pattern="^[0-9a-f]{32}$")
     context: StrategyContext | None = None
+
+
+class JarbasDocumentRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=240, pattern=r"^[^\\/]+\.(pdf|txt|md)$")
+    content_base64: str = Field(min_length=1, max_length=6_000_000)
+    source: str | None = Field(default=None, max_length=240)
 
 
 class JarbasSettingsRequest(BaseModel):
@@ -185,10 +197,15 @@ def create_app(
     market_ingest: Callable[[Database, datetime], dict] | None = None,
     ai_manager: ProviderManager | None = None,
     ai_transport: httpx.BaseTransport | None = None,
+    ai_orchestrator: Orchestrator | None = None,
+    memory_manager: MemoryManager | None = None,
+    rag_retriever: Callable[[Database, str], str] | None = None,
 ) -> FastAPI:
     load_local_env()
     config = settings or Settings.from_env()
     jarbas = ai_manager or ProviderManager(providers_from_env())
+    memory = memory_manager or MemoryManager()
+    orchestrator = ai_orchestrator or Orchestrator(jarbas, memory=memory, retriever=rag_retriever or build_context)
     # Protege a cota gratuita dos provedores: limite por instância do servidor.
     jarbas_calls: deque[float] = deque()
     make_database = database_factory or Database.from_env
@@ -612,6 +629,38 @@ def create_app(
             raise HTTPException(404, "Conversa não encontrada.")
         return {"deleted": True}
 
+    @router.post("/jarbas/documents", dependencies=protected)
+    def ingest_document(body: JarbasDocumentRequest, db: Database = Depends(database)) -> dict:
+        """Indexa um PDF/texto local para o RAG. O conteúdo nunca sai do servidor."""
+        try:
+            data = base64.b64decode(body.content_base64, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(422, "Conteúdo base64 inválido.")
+        if not data or len(data) > 4_000_000:
+            raise HTTPException(413, "Documento vazio ou maior que 4 MB.")
+        try:
+            result = ingest_bytes(db, body.name, data, now(), body.source)
+        except Exception:  # noqa: BLE001 — detalhe fica no log, nunca na resposta
+            logger.error("jarbas document ingest failed name=%s", body.name[:80], exc_info=True)
+            raise HTTPException(503, "Não foi possível indexar este documento agora.")
+        return {
+            "document_id": result.document_id,
+            "name": result.name,
+            "pages": result.pages,
+            "chunks": result.chunks,
+            "updated": result.updated,
+        }
+
+    @router.get("/jarbas/documents/search", dependencies=protected)
+    def search_documents(q: str = Query(min_length=1, max_length=500), db: Database = Depends(database)) -> dict:
+        found = retrieve(db, q)
+        return {
+            "chunks": [
+                {"name": item.name, "page": item.page, "score": round(item.score, 4), "content": item.content}
+                for item in found
+            ]
+        }
+
     @router.post("/jarbas/chat", dependencies=protected)
     def jarbas_chat(body: JarbasRequest, db: Database = Depends(database)) -> dict:
         if not jarbas.providers:
@@ -632,22 +681,23 @@ def create_app(
         conversation = jarbas_store.ensure_conversation(db, body.conversation_id, question, stamp)
         history = jarbas_store.history_for_model(db, conversation)
         jarbas_store.add_message(db, conversation, "user", question, stamp, context=body.context.model_dump() if body.context else None)
-        turns = recent_turns([ChatMessage(role, content) for role, content in history] + [ChatMessage("user", question)])
-        data, used = jarbas_tools.gather(
-            question,
-            body.context is not None,
-            body.context.symbol if body.context else None,
-            db,
-            lambda: make_provider(db),
-            watchlist_symbols(db),
-            stamp,
-            RiskLimits().max_spot_drift,
-        )
         with httpx.Client(transport=ai_transport) as client:
             chain = jarbas_catalog.model_chain(settings["openrouter_model"], jarbas_models(client), settings["allow_paid"])
-            jarbas.apply(settings["provider_order"], chain or None)
             try:
-                result = jarbas.complete(system_prompt(body.context, data), turns, client)
+                result = orchestrator.run(
+                    question=question,
+                    context=body.context,
+                    history=[ChatMessage(role, content) for role, content in history],
+                    db=db,
+                    client=client,
+                    provider_factory=lambda: make_provider(db),
+                    watchlist=watchlist_symbols(db),
+                    now=stamp,
+                    provider_order=settings["provider_order"],
+                    model_chain=chain or None,
+                    max_drift=RiskLimits().max_spot_drift,
+                    conversation=conversation,
+                )
             except AllProvidersFailed as failure:
                 for attempt in failure.attempts:
                     jarbas_store.record_usage(db, day, attempt.provider, "-", False, None, None)
@@ -665,13 +715,26 @@ def create_app(
                         "conversation_id": conversation,
                     },
                 )
+        used = list(result.tools)
+        specialists = list(result.specialists)
+        plan = list(result.plan)
+        tool_details = [
+            {"name": item.name, "ok": item.ok, "attempts": list(item.attempts)} for item in result.tool_details
+        ]
         for attempt in result.attempts[:-1]:
             jarbas_store.record_usage(db, day, attempt.provider, "-", False, None, None)
         jarbas_store.record_usage(db, day, result.provider, result.model, True, result.prompt_tokens, result.completion_tokens)
         jarbas_store.add_message(
             db, conversation, "assistant", result.text, now(), result.label, result.model,
-            tools=used, prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens, latency_ms=result.latency_ms,
+            tools=used,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            latency_ms=result.latency_ms,
+            metadata={"tools": used, "specialists": specialists, "plan": plan, "tool_details": tool_details},
         )
+        # Memória é best-effort: falha de escrita não invalida a resposta já gravada.
+        memory.remember(db, conversation, "user", question, stamp)
+        memory.remember(db, conversation, "assistant", result.text, now())
         # Allowlist de campos: nunca logar pergunta, resposta, URL ou chave.
         logger.info(
             "jarbas chat ok=True provider=%s model=%s attempts=%d latency_ms=%d prompt_tokens=%s completion_tokens=%s",
@@ -690,6 +753,9 @@ def create_app(
             "attempts": [{"provider": a.provider, "error": a.error} for a in result.attempts],
             "conversation_id": conversation,
             "tools": used,
+            "specialists": specialists,
+            "plan": plan,
+            "tool_details": tool_details,
             "usage": {"questions": jarbas_store.questions_on(db, day), "daily_limit": settings["daily_limit"]},
         }
 

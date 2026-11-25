@@ -27,6 +27,14 @@ describe('shell Web/PWA', () => {
     expect(onTab).toHaveBeenCalledWith('scanner');
   });
 
+  it('oferece skip link para o conteúdo principal', async () => {
+    setup();
+    const link = screen.getByRole('link', { name: 'Ir para o conteúdo principal' });
+    expect(link.getAttribute('href')).toBe('#conteudo-principal');
+    await userEvent.click(link);
+    expect(document.getElementById('conteudo-principal')?.textContent).toContain('Conteúdo da seção');
+  });
+
   it('usa a barra inferior no celular', async () => {
     const { onTab } = setup();
     const bottom = screen.getByRole('navigation', { name: 'Navegação móvel inferior' });

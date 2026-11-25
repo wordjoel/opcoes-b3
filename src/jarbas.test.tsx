@@ -197,7 +197,14 @@ describe('Jarbas IA', () => {
     const opener = screen.getByRole('button', { name: 'Abrir o Jarbas IA' });
     await userEvent.click(opener);
     const dialog = await screen.findByRole('dialog', { name: 'Jarbas IA' });
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
     expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Fechar o Jarbas' }));
+    const focusables = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input, [href], [tabindex]:not([tabindex="-1"])'));
+    focusables[focusables.length - 1].focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(focusables[0]);
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(focusables[focusables.length - 1]);
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
     // O botão é recriado ao fechar: o foco deve voltar ao nó atual, não ao nó antigo.
@@ -226,7 +233,11 @@ describe('Jarbas: histórico, consumo e configurações', () => {
         id: 'd'.repeat(32), title: 'Como monto a borboleta?', created_at: '', updated_at: '',
         messages: [
           { role: 'user', content: 'Como monto a borboleta?', provider: null, model: null, created_at: '' },
-          { role: 'assistant', content: 'Resposta guardada no Turso.', provider: 'OpenRouter', model: 'm:free', created_at: '' },
+          {
+            role: 'assistant', content: 'Resposta guardada no Turso.', provider: 'OpenRouter', model: 'm:free', created_at: '',
+            specialists: ['analista', 'risco'], plan: ['consultar cadeia', 'calcular risco'],
+            tool_details: [{ name: 'hedge_and_risk', ok: true, attempts: [] }],
+          },
         ],
       },
     });
@@ -234,6 +245,9 @@ describe('Jarbas: histórico, consumo e configurações', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Histórico de conversas' }));
     await userEvent.click(await screen.findByRole('button', { name: /^Como monto a borboleta\?/ }));
     expect(await screen.findByText('Resposta guardada no Turso.')).toBeTruthy();
+    expect(screen.getByText('Especialistas: analista, risco')).toBeTruthy();
+    expect(screen.getByText('Plano: consultar cadeia → calcular risco')).toBeTruthy();
+    expect(screen.getByText(/hedge_and_risk: ok/)).toBeTruthy();
   });
 
   it('configurações: escolhe modelo gratuito e bloqueia pago sem autorização', async () => {

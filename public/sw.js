@@ -5,8 +5,16 @@
  * Aumente a versão para descartar o cache antigo.
  * Versão nova fica em espera até o usuário tocar em "Atualizar": nada troca no meio do uso.
  */
-const CACHE = 'b3-shell-v4';
-const STATIC_FILES = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png'];
+const CACHE = 'b3-shell-v5';
+const STATIC_FILES = [
+  '/',
+  '/manifest.webmanifest',
+  '/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
+  '/icons/apple-touch-icon.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
