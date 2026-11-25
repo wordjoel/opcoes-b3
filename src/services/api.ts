@@ -1,6 +1,27 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { JarbasContext } from '../lib/jarbasStore';
-import { AssetOverview, CalendarsView, ChainView, DecisionEntry, LabAsset, LabOpportunity, LabRankingRow, LabStrategy, PortfolioView, Profile, ScannerResponse, StrategiesView } from '../types';
+import {
+  AssetOverview,
+  CalendarsView,
+  ChainView,
+  DataLabel,
+  DataStatus,
+  DecisionsView,
+  Envelope,
+  ExpirationsView,
+  LabOpportunitiesView,
+  LabRankingView,
+  LabStrategiesView,
+  LabStrategy,
+  LabStrategyView,
+  PortfolioView,
+  Profile,
+  Provenance,
+  Quality,
+  ScannerResponse,
+  StrategiesView,
+  WithEnvelope,
+} from '../types';
 
 export class ApiError extends Error {
   constructor(
@@ -48,6 +69,40 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const post = (body?: unknown): RequestInit => ({ method: 'POST', body: body ? JSON.stringify(body) : undefined });
+
+/**
+ * Valida o envelope de leitura. Se a API não informar procedência/qualidade/rótulo,
+ * o cliente não inventa: marca a resposta como INDISPONÍVEL e registra o motivo.
+ */
+export function readEnvelope(body: unknown): Envelope {
+  const value = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  const hasEnvelope = ['data_status', 'quality', 'missing', 'label'].every((key) => key in value);
+  if (!hasEnvelope) {
+    return {
+      provenance: null,
+      data_status: 'INDISPONIVEL',
+      quality: {
+        is_valid: false,
+        issues: [{ code: 'ENVELOPE_AUSENTE', severity: 'ERROR', detail: 'A resposta não informou procedência, qualidade e rótulo dos dados.' }],
+      },
+      missing: ['envelope de procedência ausente na resposta'],
+      label: 'INDISPONÍVEL',
+    };
+  }
+  const quality = value.quality as Quality | undefined;
+  return {
+    provenance: (value.provenance as Provenance | null) ?? null,
+    data_status: value.data_status as DataStatus,
+    quality: quality ?? { is_valid: false, issues: [] },
+    missing: Array.isArray(value.missing) ? (value.missing as string[]) : [],
+    label: value.label as DataLabel,
+  };
+}
+
+/** Leitura de mercado/lab: devolve os dados legados e um `envelope` validado à parte. */
+function checked<T>(path: string): Promise<WithEnvelope<T>> {
+  return request<T>(path).then((data) => ({ ...data, envelope: readEnvelope(data) }));
+}
 
 export interface JarbasUsageModel {
   provider: string;
@@ -156,8 +211,8 @@ export const api = {
   addFill: (body: { symbol: string; side: 'BUY' | 'SELL'; quantity: number; price: number; fees_brl: number; trade_day: string }) =>
     request<PortfolioView>('/portfolio/fills', post(body)),
   voidFill: (id: number) => request<PortfolioView>(`/portfolio/fills/${id}/void`, post()),
-  decisions: () => request<{ decisions: DecisionEntry[] }>('/decisions'),
-  labOpportunities: () => request<{ generated_at: string; assets: LabAsset[]; opportunities: LabOpportunity[] }>('/lab/opportunities'),
+  decisions: () => checked<DecisionsView>('/decisions'),
+  labOpportunities: () => checked<LabOpportunitiesView>('/lab/opportunities'),
   labStart: (body: {
     symbol: string;
     agent: string;
@@ -168,22 +223,21 @@ export const api = {
     stop_pct: number | null;
     cost_brl: number | null;
   }) => request<{ id: string; created: boolean; entry_day: string; end_day: string }>('/lab/strategies', post(body)),
-  labStrategies: (mode: 'FORWARD' | 'BACKTEST') => request<{ strategies: LabStrategy[] }>(`/lab/strategies?mode=${mode}`),
-  labStrategy: (id: string) => request<LabStrategy>(`/lab/strategies/${encodeURIComponent(id)}`),
+  labStrategies: (mode: 'FORWARD' | 'BACKTEST') => checked<LabStrategiesView>(`/lab/strategies?mode=${mode}`),
+  labStrategy: (id: string) => checked<LabStrategyView>(`/lab/strategies/${encodeURIComponent(id)}`),
   labMonitor: () => request<{ active: number; marked: number; closed: number; failed: { id: string; reason: string }[]; not_reached: number }>('/lab/monitor', post()),
   labBacktest: (body: { symbol: string; capital_brl: number; period_days: number; weeks: number }) =>
     request<{ entries: number; created: number; closed: number; skipped: { entry: string; reason: string }[]; complete: boolean; symbol: string }>('/lab/backtests', post(body)),
-  labRanking: (mode: 'FORWARD' | 'BACKTEST') =>
-    request<{ mode: string; label: string; closed: number; agents: LabRankingRow[]; structures: LabRankingRow[] }>(`/lab/ranking?mode=${mode}`),
+  labRanking: (mode: 'FORWARD' | 'BACKTEST') => checked<LabRankingView>(`/lab/ranking?mode=${mode}`),
   addSymbol: (symbol: string) => request<{ symbols: string[] }>('/watchlist', post({ symbol })),
   removeSymbol: (symbol: string) =>
     request<{ symbols: string[] }>(`/watchlist/${encodeURIComponent(symbol)}`, { method: 'DELETE' }),
-  scanner: () => request<ScannerResponse>('/scanner'),
-  asset: (symbol: string) => request<AssetOverview>(`/assets/${encodeURIComponent(symbol)}`),
+  scanner: () => checked<ScannerResponse>('/scanner'),
+  asset: (symbol: string) => checked<AssetOverview>(`/assets/${encodeURIComponent(symbol)}`),
   expirations: (symbol: string) =>
-    request<{ expirations: string[] }>(`/assets/${encodeURIComponent(symbol)}/expirations`),
+    checked<ExpirationsView>(`/assets/${encodeURIComponent(symbol)}/expirations`),
   chain: (symbol: string, expiry: string) =>
-    request<ChainView>(`/assets/${encodeURIComponent(symbol)}/chain?expiry=${expiry}`),
+    checked<ChainView>(`/assets/${encodeURIComponent(symbol)}/chain?expiry=${expiry}`),
   jarbasStatus: () => request<JarbasStatus>('/jarbas/status'),
   jarbasDiagnose: () => request<JarbasDiagnosis>('/jarbas/diagnose'),
   jarbasChat: (question: string, conversationId: string | null, context: JarbasContext | null) =>
@@ -199,10 +253,16 @@ export const api = {
     ),
   deleteJarbasConversation: (id: string) => request<{ deleted: boolean }>(`/jarbas/conversations/${id}`, { method: 'DELETE' }),
   calendars: (symbol: string, near: string, far: string) =>
-    request<CalendarsView>(`/assets/${encodeURIComponent(symbol)}/calendars?near=${near}&far=${far}`),
+    checked<CalendarsView>(`/assets/${encodeURIComponent(symbol)}/calendars?near=${near}&far=${far}`),
   strategies: (symbol: string, expiry: string, profile: Profile | null) =>
-    request<StrategiesView>(
+    checked<StrategiesView>(
       `/assets/${encodeURIComponent(symbol)}/strategies?expiry=${expiry}${profile ? `&profile=${profile}` : ''}`,
+    ),
+  /** Comando explícito: gravar decisões nunca é efeito colateral de uma leitura. */
+  recordStrategiesDecisions: (symbol: string, expiry: string, profile: Profile | null) =>
+    request<{ recorded: number }>(
+      `/assets/${encodeURIComponent(symbol)}/strategies/decisions?expiry=${expiry}${profile ? `&profile=${profile}` : ''}`,
+      post(),
     ),
 };
 

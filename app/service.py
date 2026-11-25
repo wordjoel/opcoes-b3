@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
+from app import contracts
 from core.calendario_b3 import trading_days_between
 from quant.costs import CostSchedule
 from core.clock import MARKET_TZ, market_today
@@ -63,19 +64,11 @@ def data_status(price: float | None, market_time: str | None, missing: list[str]
 
 
 def _provenance(provenance: Provenance) -> dict:
-    return {
-        "source": provenance.source,
-        "kind": provenance.kind.value,
-        "collected_at": provenance.collected_at.isoformat(),
-        "market_time": provenance.market_time.isoformat(),
-    }
+    return contracts.provenance_view(provenance)
 
 
 def _report(report: ValidationReport) -> dict:
-    return {
-        "is_valid": report.is_valid,
-        "issues": [{"code": i.code, "severity": i.severity.value, "detail": i.detail} for i in report.issues],
-    }
+    return contracts.report_view(report)
 
 
 def _snapshot(snapshot: MarketSnapshot) -> dict:
@@ -202,14 +195,17 @@ def _chart_bars(bars: list[PriceBar]) -> list[dict]:
 def asset_overview(provider: DataProvider, symbol: str, now: datetime) -> dict:
     snapshot = provider.get_market_snapshot(symbol)
     bars = provider.get_historical_prices(symbol)
+    snapshot_report = validate_snapshot(snapshot, now)
     bars_report = validate_bars(bars)
+    missing = contracts.missing_from_report(snapshot_report) + contracts.missing_from_report(bars_report)
     usable_bars = bars if bars_report.is_valid else []
     hv, ewma = _volatility(usable_bars)
     regime = _regime(usable_bars, None)
-    return {
+    provenance = _provenance(snapshot.provenance)
+    status = data_status(snapshot.price, snapshot.provenance.market_time.isoformat(), missing, now)
+    payload = {
         "quote": _snapshot(snapshot),
-        "quote_quality": _report(validate_snapshot(snapshot, now)),
-        "data_status": data_status(snapshot.price, snapshot.provenance.market_time.isoformat(), [], now),
+        "quote_quality": _report(snapshot_report),
         "history_quality": _report(bars_report),
         "historical_volatility": hv,
         "ewma_volatility": ewma,
@@ -217,6 +213,14 @@ def asset_overview(provider: DataProvider, symbol: str, now: datetime) -> dict:
         "history": _chart_bars(usable_bars),
         "structure": _structure_view(usable_bars),
     }
+    return contracts.add_envelope(
+        payload,
+        provenance=provenance,
+        data_status=status,
+        quality=contracts.combine_quality(payload["quote_quality"], payload["history_quality"]),
+        missing=missing,
+        label=contracts.label_from_status(status, snapshot.provenance.kind.value),
+    )
 
 
 def _load_chain(provider: DataProvider, symbol: str, expiry: date, now: datetime) -> tuple[OptionChain, ValidationReport]:
@@ -229,14 +233,15 @@ def _load_chain(provider: DataProvider, symbol: str, expiry: date, now: datetime
 def chain_view(provider: DataProvider, symbol: str, expiry: date, now: datetime) -> dict:
     chain, report = _load_chain(provider, symbol, expiry, now)
     usable = {quote.symbol for quote in report.usable_quotes}
-    return {
+    missing = contracts.missing_from_report(report)
+    provenance = _provenance(chain.underlying.provenance)
+    status = data_status(chain.underlying.price, chain.underlying.provenance.market_time.isoformat(), missing, now)
+    payload = {
         "symbol": symbol,
         "expiry": expiry.isoformat(),
         "market_date": chain.market_date.isoformat() if chain.market_date else None,
         "spot": chain.underlying.price,
         "risk_free_rate": chain.risk_free_rate,
-        "provenance": _provenance(chain.underlying.provenance),
-        "quality": _report(report),
         "open_interest": summarize_open_interest(chain.quotes).__dict__,
         "quotes": [
             {
@@ -257,6 +262,14 @@ def chain_view(provider: DataProvider, symbol: str, expiry: date, now: datetime)
             for quote in sorted(chain.quotes, key=lambda item: (item.strike, item.kind.value))
         ],
     }
+    return contracts.add_envelope(
+        payload,
+        provenance=provenance,
+        data_status=status,
+        quality=_report(report),
+        missing=missing,
+        label=contracts.label_from_status(status, chain.underlying.provenance.kind.value),
+    )
 
 
 def strategies_view(
@@ -388,7 +401,13 @@ def strategies_view(
         )
     ranked_rows.sort(key=lambda row: -row["ranking"]["expected_return_on_risk"])
     rows.extend(ranked_rows)
-    return {
+    missing = contracts.missing_from_report(report)
+    if events_error:
+        missing.append(f"Eventos: {events_error}")
+    missing.extend(item.reason for item in unavailable if item.reason)
+    provenance = _provenance(chain.underlying.provenance)
+    status = data_status(spot, chain.underlying.provenance.market_time.isoformat(), missing, now)
+    payload = {
         "symbol": symbol,
         "expiry": expiry.isoformat(),
         "market_date": chain.market_date.isoformat() if chain.market_date else None,
@@ -413,10 +432,17 @@ def strategies_view(
         "structure": _structure_view(bars),
         "events": _events_view(events),
         "events_error": events_error,
-        "quality": _report(report),
         "candidates": rows,
         "unavailable": [item.__dict__ for item in unavailable],
     }
+    return contracts.add_envelope(
+        payload,
+        provenance=provenance,
+        data_status=status,
+        quality=_report(report),
+        missing=missing,
+        label=contracts.label_from_status(status, derived=True),
+    )
 
 
 CALENDAR_MISSING = (
@@ -490,7 +516,11 @@ def calendars_view(provider: DataProvider, symbol: str, near: date, far: date, n
             }
         )
     rows.sort(key=lambda row: -(row["expected_pnl"] / row["max_loss"] if row["max_loss"] else 0))
-    return {
+    missing_data = contracts.missing_from_report(near_report) + contracts.missing_from_report(far_report)
+    missing_data.extend(reason for _, _, reason in missing if reason)
+    provenance = _provenance(near_chain.underlying.provenance)
+    status = data_status(spot, near_chain.underlying.provenance.market_time.isoformat(), missing_data, now)
+    payload = {
         "symbol": symbol,
         "near": near.isoformat(),
         "far": far.isoformat(),
@@ -504,6 +534,14 @@ def calendars_view(provider: DataProvider, symbol: str, near: date, far: date, n
         "candidates": rows,
         "unavailable": [{"key": key, "name": name, "reason": reason} for key, name, reason in missing],
     }
+    return contracts.add_envelope(
+        payload,
+        provenance=provenance,
+        data_status=status,
+        quality=contracts.combine_quality(_report(near_report), _report(far_report)),
+        missing=missing_data,
+        label=contracts.label_from_status(status, derived=True),
+    )
 
 
 def _signals(row: dict, limits: RiskLimits) -> list[dict]:
@@ -585,8 +623,11 @@ def scan_symbol(
         "structure_trend": None,
         "events": [],
         "source": None,
+        "provenance": None,
         "data_status": "INDISPONIVEL",
+        "quality": contracts.quality_from_missing([]),
         "missing": [],
+        "label": "INDISPONÍVEL",
         "history_warnings": [],
     }
     if stop_at is not None and time.monotonic() >= stop_at:
@@ -602,6 +643,7 @@ def scan_symbol(
             change_percent=live.change_percent,
             market_time=live.provenance.market_time.isoformat(),
             source=live.provenance.source,
+            provenance=_provenance(live.provenance),
         )
     except DataInsufficientError as error:
         row["missing"].append(f"Cotação: {error.detail}")
@@ -663,8 +705,16 @@ def scan_symbol(
             row["signals"].append(
                 {"type": "ROMPIMENTO", "detail": f"{last.kind} de {side}: fechou além de {level} em {last.day}."}
             )
-    row["data_status"] = data_status(row["price"], row["market_time"], row["missing"], now)
-    return row
+    status = data_status(row["price"], row["market_time"], row["missing"], now)
+    kind = live.provenance.kind.value if live else None
+    return contracts.add_envelope(
+        row,
+        provenance=row["provenance"],
+        data_status=status,
+        quality=contracts.quality_from_missing(row["missing"]),
+        missing=row["missing"],
+        label=contracts.label_from_status(status, kind),
+    )
 
 
 def _scan_safely(provider: DataProvider, symbol: str, now: datetime, stop_at: float) -> dict:
@@ -691,8 +741,11 @@ def _scan_safely(provider: DataProvider, symbol: str, now: datetime, stop_at: fl
             "structure_trend": None,
             "events": [],
             "source": None,
+            "provenance": None,
             "data_status": "INDISPONIVEL",
+            "quality": contracts.quality_from_missing([f"Ativo: falha inesperada ({type(error).__name__})"]),
             "missing": [f"Ativo: falha inesperada ({type(error).__name__})"],
+            "label": "INDISPONÍVEL",
             "history_warnings": [],
             "signals": [],
         }
@@ -710,10 +763,19 @@ def scanner(
         rows = list(pool.map(lambda symbol: _scan_safely(provider, symbol, now, stop_at), symbols))
     timed_out = [row["symbol"] for row in rows if _TIMED_OUT in row["missing"]]
     incomplete = [row["symbol"] for row in rows if row["missing"]]
-    return {
+    status = "INDISPONIVEL" if not rows else ("INCOMPLETO" if incomplete else "REAL")
+    payload = {
         "generated_at": now.isoformat(),
         "rows": rows,
         "complete": not incomplete,
         "incomplete_symbols": incomplete,
         "timed_out_symbols": timed_out,
     }
+    return contracts.add_envelope(
+        payload,
+        provenance=None,
+        data_status=status,
+        quality=contracts.quality_from_missing(incomplete),
+        missing=incomplete,
+        label=contracts.label_from_status(status, derived=True),
+    )

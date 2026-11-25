@@ -7,6 +7,8 @@ export interface Provenance {
   kind: string;
   collected_at: string;
   market_time: string;
+  /** Idade informada pela própria fonte; null quando a fonte não informa. */
+  delay_seconds: number | null;
 }
 
 export interface Quality {
@@ -15,7 +17,20 @@ export interface Quality {
 }
 
 export type DataStatus = 'REAL' | 'ATRASADO' | 'INCOMPLETO' | 'INDISPONIVEL';
+export type DataLabel = 'REAL' | 'HISTÓRICO' | 'CALCULADO' | 'SIMULADO' | 'OBSERVADO' | 'INDISPONÍVEL';
 export type DecisionStatus = 'APROVADA' | 'REPROVADA' | 'INCOMPLETA';
+
+/** Envelope presente em toda leitura de mercado e laboratório. */
+export interface Envelope {
+  provenance: Provenance | null;
+  data_status: DataStatus;
+  quality: Quality;
+  missing: string[];
+  label: DataLabel;
+}
+
+/** O cliente acrescenta `envelope` validado sem descartar as chaves legadas da resposta. */
+export type WithEnvelope<T> = T & { envelope: Envelope };
 
 export type Profile = 'CONSERVATIVE' | 'MODERATE' | 'AGGRESSIVE';
 
@@ -64,7 +79,7 @@ export interface ScannerRow {
   signals: Signal[];
 }
 
-export interface ScannerResponse {
+export interface ScannerResponse extends Envelope {
   generated_at: string;
   complete: boolean;
   incomplete_symbols: string[];
@@ -72,7 +87,7 @@ export interface ScannerResponse {
   rows: ScannerRow[];
 }
 
-export interface AssetOverview {
+export interface AssetOverview extends Envelope {
   quote: {
     symbol: string;
     name: string | null;
@@ -117,7 +132,7 @@ export interface ChainQuote {
   usable: boolean;
 }
 
-export interface ChainView {
+export interface ChainView extends Envelope {
   symbol: string;
   expiry: string;
   market_date: string | null;
@@ -230,7 +245,7 @@ export interface CalendarCandidate {
   decision: { status: DecisionStatus; reasons: string[]; missing: string[] };
 }
 
-export interface CalendarsView {
+export interface CalendarsView extends Envelope {
   symbol: string;
   near: string;
   far: string;
@@ -280,7 +295,7 @@ export interface DecisionEntry {
   inputs: Record<string, unknown>;
 }
 
-export interface StrategiesView {
+export interface StrategiesView extends Envelope {
   symbol: string;
   expiry: string;
   market_date: string | null;
@@ -424,4 +439,31 @@ export interface LabRankingRow {
   reading: 'LUCRO_NOS_DOIS_LIMITES' | 'LUCRO_SO_NO_FECHAMENTO' | 'SEM_LUCRO' | 'EXECUCAO_NAO_MEDIDA';
   entry_dates: number;
   position: number | null;
+}
+
+export interface ExpirationsView extends Envelope {
+  expirations: string[];
+}
+
+export interface DecisionsView extends Envelope {
+  decisions: DecisionEntry[];
+}
+
+export interface LabOpportunitiesView extends Envelope {
+  generated_at: string;
+  assets: LabAsset[];
+  opportunities: LabOpportunity[];
+}
+
+export interface LabStrategiesView extends Envelope {
+  strategies: LabStrategy[];
+}
+
+export type LabStrategyView = LabStrategy & Envelope;
+
+export interface LabRankingView extends Envelope {
+  mode: string;
+  closed: number;
+  agents: LabRankingRow[];
+  structures: LabRankingRow[];
 }

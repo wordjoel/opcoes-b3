@@ -87,6 +87,11 @@ def strategies(client):
     return client.get(f"/api/assets/PETR4/strategies?expiry={EXPIRY}").json()
 
 
+def record_decisions(client):
+    """Registro é um comando explícito: a leitura de estratégias não grava."""
+    return client.post(f"/api/assets/PETR4/strategies/decisions?expiry={EXPIRY}")
+
+
 class TestReviewWithPortfolio:
     def test_without_settings_the_review_is_skipped(self, client):
         view = strategies(client)
@@ -113,9 +118,15 @@ class TestReviewWithPortfolio:
 
 
 class TestDecisionLog:
+    def test_reading_strategies_does_not_record_decisions(self, client):
+        strategies(client)
+        strategies(client)
+        assert client.get("/api/decisions").json()["decisions"] == []
+
     def test_each_decision_is_recorded_once_with_inputs(self, client):
         first = strategies(client)
-        strategies(client)
+        assert record_decisions(client).json()["recorded"] == len(first["candidates"])
+        assert record_decisions(client).json()["recorded"] == 0
         log = client.get("/api/decisions").json()["decisions"]
         assert len(log) == len(first["candidates"])
         entry = next(item for item in log if item["structure_key"] == "long_call")
@@ -125,10 +136,10 @@ class TestDecisionLog:
         assert "capital e limite de perda não informados" in entry["missing"]
 
     def test_a_new_input_creates_a_new_entry(self, client):
-        strategies(client)
+        record_decisions(client)
         before = len(client.get("/api/decisions").json()["decisions"])
         client.put("/api/settings/risk", json={"capital_brl": 10_000, "max_loss_pct": 5})
-        strategies(client)
+        record_decisions(client)
         assert len(client.get("/api/decisions?symbol=PETR4").json()["decisions"]) > before
 
     def test_filter_validates_symbol(self, client):

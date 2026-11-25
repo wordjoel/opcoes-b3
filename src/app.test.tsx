@@ -222,6 +222,15 @@ describe('estratégias', () => {
     await waitFor(() => expect(calls.filter((call) => call.path.endsWith('/strategies')).length).toBeGreaterThan(before));
   });
 
+  it('registra decisões só quando o usuário pede', async () => {
+    routes['POST /api/assets/PETR4/strategies/decisions'] = { body: { recorded: 3 } };
+    await open();
+    expect(calls.some((call) => call.path.includes('/strategies/decisions'))).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: 'Registrar decisões' }));
+    expect(await screen.findByText('3 decisões registradas.')).toBeTruthy();
+    expect(calls.some((call) => call.method === 'POST' && call.path.endsWith('/strategies/decisions'))).toBe(true);
+  });
+
   it('filtra as estruturas pela visão de mercado', async () => {
     await open();
     await userEvent.click(screen.getByRole('button', { name: 'Acho que vai cair' }));

@@ -17,7 +17,7 @@ from collections import deque
 
 import httpx
 
-from app import auth, carteira, lab, service
+from app import auth, carteira, contracts, lab, service
 from app.jarbas import catalog as jarbas_catalog, store as jarbas_store, tools as jarbas_tools
 from app.jarbas.assistant import MAX_MESSAGE_CHARS, StrategyContext, recent_turns, system_prompt
 from app.jarbas.providers import AllProvidersFailed, ChatMessage, ProviderManager, config_warnings, providers_from_env
@@ -358,7 +358,7 @@ def create_app(
         db.run("DELETE FROM watchlist WHERE symbol = ?", (_valid_symbol(symbol),))
         return {"symbols": watchlist_symbols(db)}
 
-    @router.get("/scanner", dependencies=protected)
+    @router.get("/scanner", dependencies=protected, response_model=contracts.ScannerResponse)
     def get_scanner(db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
         return service.scanner(source, watchlist_symbols(db), now())
 
@@ -396,7 +396,7 @@ def create_app(
             "lab": {key: monitored[key] for key in ("active", "marked", "closed", "not_reached")},
         }
 
-    @router.get("/lab/opportunities", dependencies=protected)
+    @router.get("/lab/opportunities", dependencies=protected, response_model=contracts.LabOpportunitiesResponse)
     def lab_opportunities(db: Database = Depends(database), source: DataProvider = Depends(provider)) -> dict:
         capital, _ = read_capital(db)
         costs, _ = read_costs(db)
@@ -407,11 +407,21 @@ def create_app(
         plan = lab.LabPlan(body.capital_brl, body.period_days, body.target_pct, body.stop_pct, body.cost_brl, read_costs(db)[0])
         return lab.start_forward(source, db, _valid_symbol(body.symbol), body.agent, body.key, plan, now())
 
-    @router.get("/lab/strategies", dependencies=protected)
+    @router.get("/lab/strategies", dependencies=protected, response_model=contracts.LabStrategiesResponse)
     def lab_list(mode: Literal["FORWARD", "BACKTEST"] | None = None, db: Database = Depends(database)) -> dict:
-        return {"strategies": lab.list_strategies(db, mode)}
+        strategies = lab.list_strategies(db, mode)
+        status = "REAL" if strategies else "INDISPONIVEL"
+        measured = "SIMULADO" if mode == "BACKTEST" else "OBSERVADO" if mode == "FORWARD" else None
+        return contracts.add_envelope(
+            {"strategies": strategies},
+            provenance=None,
+            data_status=status,
+            quality=contracts.quality_from_missing([]),
+            missing=[],
+            label=contracts.label_from_status(status, derived=True, measured=measured),
+        )
 
-    @router.get("/lab/strategies/{identity}", dependencies=protected)
+    @router.get("/lab/strategies/{identity}", dependencies=protected, response_model=contracts.LabStrategyResponse)
     def lab_detail(identity: str, db: Database = Depends(database)) -> dict:
         detail = lab.strategy_detail(db, identity)
         if detail is None:
@@ -427,25 +437,48 @@ def create_app(
         plan = lab.LabPlan(body.capital_brl, body.period_days, body.target_pct, body.stop_pct, body.cost_brl, read_costs(db)[0])
         return lab.run_backtest(source, db, _valid_symbol(body.symbol), plan, body.weeks, now())
 
-    @router.get("/lab/ranking", dependencies=protected)
+    @router.get("/lab/ranking", dependencies=protected, response_model=contracts.LabRankingResponse)
     def lab_ranking(mode: Literal["FORWARD", "BACKTEST"], db: Database = Depends(database)) -> dict:
         return lab.ranking(db, mode)
 
-    @router.get("/assets/{symbol}", dependencies=protected)
+    @router.get("/assets/{symbol}", dependencies=protected, response_model=contracts.AssetResponse)
     def get_asset(symbol: str, source: DataProvider = Depends(provider)) -> dict:
         return service.asset_overview(source, _valid_symbol(symbol), now())
 
-    @router.get("/assets/{symbol}/expirations", dependencies=protected)
+    @router.get("/assets/{symbol}/expirations", dependencies=protected, response_model=contracts.ExpirationsResponse)
     def get_expirations(symbol: str, source: DataProvider = Depends(provider)) -> dict:
         today = market_today(now())
         days = [day for day in source.get_expirations(_valid_symbol(symbol)) if day >= today]
-        return {"expirations": [day.isoformat() for day in days]}
+        missing = [] if days else ["sem vencimentos futuros informados pela fonte"]
+        status = "REAL" if days else "INDISPONIVEL"
+        return contracts.add_envelope(
+            {"expirations": [day.isoformat() for day in days]},
+            provenance=None,
+            data_status=status,
+            quality=contracts.quality_from_missing(missing),
+            missing=missing,
+            label=contracts.label_from_status(status),
+        )
 
-    @router.get("/assets/{symbol}/chain", dependencies=protected)
+    @router.get("/assets/{symbol}/chain", dependencies=protected, response_model=contracts.ChainResponse)
     def get_chain(symbol: str, expiry: date, source: DataProvider = Depends(provider)) -> dict:
         return service.chain_view(source, _valid_symbol(symbol), expiry, now())
 
-    @router.get("/assets/{symbol}/strategies", dependencies=protected)
+    def reviewed_strategies(
+        symbol: str,
+        expiry: date,
+        profile: Literal["CONSERVATIVE", "MODERATE", "AGGRESSIVE"] | None,
+        source: DataProvider,
+        db: Database,
+        moment: datetime,
+    ) -> dict:
+        capital, _ = read_capital(db)
+        costs, _ = read_costs(db)
+        view = service.strategies_view(source, _valid_symbol(symbol), expiry, moment, profile=profile, capital=capital, costs=costs)
+        carteira.apply_review(view, carteira.review_candidates(db, view))
+        return view
+
+    @router.get("/assets/{symbol}/strategies", dependencies=protected, response_model=contracts.StrategiesResponse)
     def get_strategies(
         symbol: str,
         expiry: date,
@@ -453,15 +486,22 @@ def create_app(
         source: DataProvider = Depends(provider),
         db: Database = Depends(database),
     ) -> dict:
-        capital, _ = read_capital(db)
-        costs, _ = read_costs(db)
-        moment = now()
-        view = service.strategies_view(source, _valid_symbol(symbol), expiry, moment, profile=profile, capital=capital, costs=costs)
-        carteira.apply_review(view, carteira.review_candidates(db, view))
-        carteira.record_decisions(db, view, moment)
-        return view
+        # Leitura não grava: o registro de decisão é um comando explícito abaixo.
+        return reviewed_strategies(symbol, expiry, profile, source, db, now())
 
-    @router.get("/assets/{symbol}/calendars", dependencies=protected)
+    @router.post("/assets/{symbol}/strategies/decisions", dependencies=protected)
+    def record_strategy_decisions(
+        symbol: str,
+        expiry: date,
+        profile: Literal["CONSERVATIVE", "MODERATE", "AGGRESSIVE"] | None = None,
+        source: DataProvider = Depends(provider),
+        db: Database = Depends(database),
+    ) -> dict:
+        moment = now()
+        view = reviewed_strategies(symbol, expiry, profile, source, db, moment)
+        return {"recorded": carteira.record_decisions(db, view, moment)}
+
+    @router.get("/assets/{symbol}/calendars", dependencies=protected, response_model=contracts.CalendarsResponse)
     def get_calendars(symbol: str, near: date, far: date, source: DataProvider = Depends(provider)) -> dict:
         return service.calendars_view(source, _valid_symbol(symbol), near, far, now())
 
@@ -670,9 +710,18 @@ def create_app(
             raise HTTPException(404, "Operação não encontrada")
         return carteira.portfolio_view(db)
 
-    @router.get("/decisions", dependencies=protected)
+    @router.get("/decisions", dependencies=protected, response_model=contracts.DecisionsResponse)
     def get_decisions(symbol: str | None = None, limit: int = Query(default=100, ge=1, le=500), db: Database = Depends(database)) -> dict:
-        return {"decisions": carteira.list_decisions(db, _valid_symbol(symbol) if symbol else None, limit)}
+        decisions = carteira.list_decisions(db, _valid_symbol(symbol) if symbol else None, limit)
+        status = "REAL" if decisions else "INDISPONIVEL"
+        return contracts.add_envelope(
+            {"decisions": decisions},
+            provenance=None,
+            data_status=status,
+            quality=contracts.quality_from_missing([]),
+            missing=[],
+            label="OBSERVADO" if decisions else "INDISPONÍVEL",
+        )
 
     app.include_router(router)
     return app

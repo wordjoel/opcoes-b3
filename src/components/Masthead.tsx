@@ -1,46 +1,35 @@
+import { Bot, Menu } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 
-const MENU = [
-  { id: 'dashboard', label: 'Monitor' },
-  { id: 'scanner', label: 'Scanner B3' },
-  { id: 'strategy', label: 'Estratégias' },
-  { id: 'alerts', label: 'Alertas' },
-  { id: 'lab', label: 'Laboratório' },
-  { id: 'carteira', label: 'Carteira' },
-];
-
 interface MastheadProps {
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
-  alertCount: number;
+  title: string;
   onLogout: () => void;
+  onOpenMenu: () => void;
+  onOpenJarbas: () => void;
 }
 
-export function Masthead({ activeTab, setActiveTab, alertCount, onLogout }: MastheadProps) {
+/** Barra compacta: a navegação completa vive no AppShell, sem botões duplicados. */
+export function Masthead({ title, onLogout, onOpenMenu, onOpenJarbas }: MastheadProps) {
   return (
-    <header>
-      <h1 className="text-[clamp(2.75rem,10vw,7.5rem)] leading-[0.95] tracking-tight">B3 Opções Pro</h1>
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-y border-ink mt-3 py-2">
-        <nav aria-label="Seções" className="flex flex-wrap gap-2">
-          {MENU.map((item) => (
-            <button
-              key={item.id}
-              aria-current={activeTab === item.id ? 'page' : undefined}
-              onClick={() => setActiveTab(item.id)}
-              className="np-btn"
-            >
-              {item.label}
-              {item.id === 'alerts' && alertCount > 0 && <span aria-label={`${alertCount} alertas`}>({alertCount})</span>}
-            </button>
-          ))}
-        </nav>
-        <div className="flex flex-wrap items-center gap-4">
-          <p className="np-label">Análise e decisão. Este app não envia ordens.</p>
-          <ThemeToggle />
-          <button onClick={onLogout} className="np-btn">
-            Sair
-          </button>
+    <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between gap-3 border-b border-[var(--dp-color-rule)] bg-[var(--dp-color-ground)] px-4 py-2 md:px-8">
+      <div className="flex min-w-0 items-center gap-3">
+        <button type="button" onClick={onOpenMenu} aria-label="Abrir todos os módulos" className="np-btn lg:hidden">
+          <Menu className="h-4 w-4" />
+        </button>
+        <div className="min-w-0">
+          <p className="np-label leading-none">B3 Opções Pro</p>
+          <h1 className="truncate font-display text-lg md:text-xl">{title}</h1>
         </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2 md:gap-3">
+        <button type="button" onClick={onOpenJarbas} aria-label="Ir para o Jarbas" className="np-btn">
+          <Bot className="h-4 w-4" />
+          <span className="hidden sm:inline">Jarbas</span>
+        </button>
+        <ThemeToggle />
+        <button type="button" onClick={onLogout} className="np-btn">
+          Sair
+        </button>
       </div>
     </header>
   );

@@ -10,7 +10,8 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from app.service import _try_bars, _regime, spot_drift
+from app import contracts
+from app.service import _try_bars, _regime, data_status, spot_drift
 from core.calendario_b3 import add_trading_days
 from quant.costs import CostSchedule, round_trip_cost
 from core.clock import grid_still_current, market_today
@@ -134,7 +135,17 @@ def discover(
     assets, opportunities = [], []
     for symbol in symbols:
         if time.monotonic() >= stop_at:
-            assets.append({"symbol": symbol, "status": "NAO_ANALISADO", "reason": "tempo esgotado", "liquidity": None})
+            reason = "tempo esgotado"
+            assets.append(
+                contracts.add_envelope(
+                    {"symbol": symbol, "status": "NAO_ANALISADO", "reason": reason, "liquidity": None},
+                    provenance=None,
+                    data_status="INDISPONIVEL",
+                    quality=contracts.quality_from_missing([reason]),
+                    missing=[reason],
+                    label="INDISPONÍVEL",
+                )
+            )
             continue
         try:
             expiry = _reference_expiry(provider, symbol, today)
@@ -143,19 +154,44 @@ def discover(
             report.require_valid()
             t, r = _chain_times(chain)
         except DataInsufficientError as error:
-            assets.append({"symbol": symbol, "status": "DADOS_INSUFICIENTES", "reason": error.detail, "liquidity": None})
+            assets.append(
+                contracts.add_envelope(
+                    {"symbol": symbol, "status": "DADOS_INSUFICIENTES", "reason": error.detail, "liquidity": None},
+                    provenance=None,
+                    data_status="INDISPONIVEL",
+                    quality=contracts.quality_from_missing([error.detail]),
+                    missing=[error.detail],
+                    label="INDISPONÍVEL",
+                )
+            )
             continue
         liquidity = _liquidity(report)
+        missing = contracts.missing_from_report(report)
+        reason = None if liquidity["sufficient"] else f"menos de {MIN_LIQUID_SERIES} séries líquidas"
+        if reason:
+            missing.append(reason)
+        provenance = contracts.provenance_view(chain.underlying.provenance)
+        status = data_status(chain.underlying.price, chain.underlying.provenance.market_time.isoformat(), missing, now)
+        quality = contracts.report_view(report)
+        if reason:
+            quality = contracts.combine_quality(quality, contracts.quality_from_missing([reason]))
         assets.append(
-            {
-                "symbol": symbol,
-                "status": "ANALISADO" if liquidity["sufficient"] else "SEM_LIQUIDEZ",
-                "reason": None if liquidity["sufficient"] else f"menos de {MIN_LIQUID_SERIES} séries líquidas",
-                "liquidity": liquidity,
-                "market_date": chain.market_date.isoformat() if chain.market_date else None,
-                "expiry": expiry.isoformat(),
-                "source": chain.underlying.provenance.source,
-            }
+            contracts.add_envelope(
+                {
+                    "symbol": symbol,
+                    "status": "ANALISADO" if liquidity["sufficient"] else "SEM_LIQUIDEZ",
+                    "reason": reason,
+                    "liquidity": liquidity,
+                    "market_date": chain.market_date.isoformat() if chain.market_date else None,
+                    "expiry": expiry.isoformat(),
+                    "source": chain.underlying.provenance.source,
+                },
+                provenance=provenance,
+                data_status=status,
+                quality=quality,
+                missing=missing,
+                label=contracts.label_from_status(status, chain.underlying.provenance.kind.value),
+            )
         )
         try:
             drift = spot_drift(chain, provider.get_market_snapshot(symbol))
@@ -170,27 +206,34 @@ def discover(
                 probability, theoretical = _theoretical(candidate, spot, t, r)
                 rules = assess_risk(proposal, candidate.quotes, spot, t, r, drift, use_book=False)
                 opportunities.append(
-                    {
-                        "agent": agent,
-                        "agent_name": agent_name,
-                        "key": candidate.key,
-                        "name": proposal.name,
-                        "symbol": symbol,
-                        "expiry": expiry.isoformat(),
-                        "market_date": chain.market_date.isoformat() if chain.market_date else None,
-                        "days_to_expiry": (expiry - today).days,
-                        "legs": [_leg_view(leg, quote) for leg, quote in zip(proposal.legs, candidate.quotes)],
-                        "net_premium": net_premium(proposal.legs),
-                        "max_profit": proposal.max_profit,
-                        "max_loss": proposal.max_loss,
-                        "breakevens": proposal.breakeven_points,
-                        "risk_reward": proposal.risk_reward_ratio,
-                        "probability_of_profit": probability,
-                        "potential_return": proposal.max_profit / proposal.max_loss if proposal.max_profit is not None else None,
-                        "theoretical_return": theoretical / proposal.max_loss if theoretical is not None else None,
-                        "liquidity_score": min((leg_liquidity(q, use_book=False) or 0) for q in candidate.quotes),
-                        "decision": decide(proposal, rules, capital, drift, costs),
-                    }
+                    contracts.add_envelope(
+                        {
+                            "agent": agent,
+                            "agent_name": agent_name,
+                            "key": candidate.key,
+                            "name": proposal.name,
+                            "symbol": symbol,
+                            "expiry": expiry.isoformat(),
+                            "market_date": chain.market_date.isoformat() if chain.market_date else None,
+                            "days_to_expiry": (expiry - today).days,
+                            "legs": [_leg_view(leg, quote) for leg, quote in zip(proposal.legs, candidate.quotes)],
+                            "net_premium": net_premium(proposal.legs),
+                            "max_profit": proposal.max_profit,
+                            "max_loss": proposal.max_loss,
+                            "breakevens": proposal.breakeven_points,
+                            "risk_reward": proposal.risk_reward_ratio,
+                            "probability_of_profit": probability,
+                            "potential_return": proposal.max_profit / proposal.max_loss if proposal.max_profit is not None else None,
+                            "theoretical_return": theoretical / proposal.max_loss if theoretical is not None else None,
+                            "liquidity_score": min((leg_liquidity(q, use_book=False) or 0) for q in candidate.quotes),
+                            "decision": decide(proposal, rules, capital, drift, costs),
+                        },
+                        provenance=provenance,
+                        data_status=status,
+                        quality=quality,
+                        missing=missing,
+                        label=contracts.label_from_status(status, derived=True),
+                    )
                 )
     opportunities.sort(
         key=lambda item: (
@@ -198,7 +241,16 @@ def discover(
             -(item["theoretical_return"] if item["theoretical_return"] is not None else float("-inf")),
         )
     )
-    return {"generated_at": now.isoformat(), "assets": assets, "opportunities": opportunities}
+    missing = [f"{item['symbol']}: {item['reason']}" for item in assets if item.get("reason")]
+    status = "INDISPONIVEL" if not assets else ("INCOMPLETO" if missing else "REAL")
+    return contracts.add_envelope(
+        {"generated_at": now.isoformat(), "assets": assets, "opportunities": opportunities},
+        provenance=None,
+        data_status=status,
+        quality=contracts.quality_from_missing(missing),
+        missing=missing,
+        label=contracts.label_from_status(status, derived=True),
+    )
 
 
 def _strategy_id(mode: str, agent: str, key: str, symbol: str, expiry: date, entry: date, legs, capital, end_day: date) -> str:
@@ -562,7 +614,17 @@ def _strategy_view(
     }
     if with_marks is not None:
         view["marks"] = with_marks
-    return view
+    source = row["source"]
+    missing = [] if source else ["fonte não informada no registro"]
+    status = "REAL" if source else "INDISPONIVEL"
+    return contracts.add_envelope(
+        view,
+        provenance=({"source": source, "kind": None, "collected_at": None, "market_time": None, "delay_seconds": None} if source else None),
+        data_status=status,
+        quality=contracts.quality_from_missing(missing),
+        missing=missing,
+        label=measured_label,
+    )
 
 
 def list_strategies(db: Database, mode: str | None = None, limit: int = 300) -> list[dict]:
@@ -614,10 +676,18 @@ def ranking(db: Database, mode: str) -> dict:
     agents = rank_groups(rows, "agent")
     for item in agents:
         item["agent_name"] = AGENTS.get(item["agent"], (item["agent"],))[0]
-    return {
-        "mode": mode,
-        "label": "SIMULADO" if mode == "BACKTEST" else "OBSERVADO",
-        "closed": len(rows),
-        "agents": agents,
-        "structures": rank_groups(rows, "structure_name"),
-    }
+    measured = "SIMULADO" if mode == "BACKTEST" else "OBSERVADO"
+    status = "REAL" if rows else "INDISPONIVEL"
+    return contracts.add_envelope(
+        {
+            "mode": mode,
+            "closed": len(rows),
+            "agents": agents,
+            "structures": rank_groups(rows, "structure_name"),
+        },
+        provenance=None,
+        data_status=status,
+        quality=contracts.quality_from_missing([]),
+        missing=[],
+        label=measured,
+    )

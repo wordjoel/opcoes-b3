@@ -53,8 +53,26 @@ export function StrategyView({ symbols, symbol, onSymbol }: StrategyViewProps) {
   const key = symbol && expiry ? `${symbol}:${expiry}` : null;
   const strategies = useResource(key && `${key}:${profile}`, () => api.strategies(symbol!, expiry!, profile));
   const chain = useResource(key, () => api.chain(symbol!, expiry!));
+  const [recording, setRecording] = useState(false);
+  const [recordMessage, setRecordMessage] = useState<string | null>(null);
+
+  useEffect(() => setRecordMessage(null), [symbol, expiry, profile]);
   // Fora da tela de estratégias, o Jarbas não fala de uma estrutura que não está à vista.
   useEffect(() => () => setJarbasContext(null), []);
+
+  const recordDecisions = async () => {
+    if (!symbol || !expiry) return;
+    setRecording(true);
+    setRecordMessage(null);
+    try {
+      const result = await api.recordStrategiesDecisions(symbol, expiry, profile);
+      setRecordMessage(result.recorded > 0 ? `${result.recorded} decisões registradas.` : 'Decisões já registradas com estes dados.');
+    } catch (error) {
+      setRecordMessage((error as ApiError).message);
+    } finally {
+      setRecording(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -101,6 +119,10 @@ export function StrategyView({ symbols, symbol, onSymbol }: StrategyViewProps) {
               ))}
             </select>
           </label>
+          <button type="button" onClick={() => void recordDecisions()} disabled={!key || recording} className="np-btn self-end">
+            {recording ? 'Registrando...' : 'Registrar decisões'}
+          </button>
+          {recordMessage && <p role="status" className="np-note self-center">{recordMessage}</p>}
         </div>
       </header>
 

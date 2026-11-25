@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { Alerts, alertCount } from './components/Alerts';
+import { AppShell } from './components/AppShell';
 import { AppStatus } from './components/AppStatus';
 import { Jarbas } from './components/Jarbas';
 import { Carteira } from './components/Carteira';
@@ -12,7 +13,6 @@ import { ErrorNotice, Loading } from './components/Common';
 import { Dashboard } from './components/Dashboard';
 import { Lab } from './components/Lab';
 import { Login } from './components/Login';
-import { Masthead } from './components/Masthead';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Scanner } from './components/Scanner';
 import { StrategyView } from './components/StrategyView';
@@ -74,33 +74,36 @@ function Workspace({ onLogout }: { onLogout: () => void }) {
   };
 
   return (
-    <div className="max-w-[1400px] mx-auto p-4 md:p-8 space-y-6">
-      <Masthead activeTab={activeTab} setActiveTab={setActiveTab} alertCount={alertCount(rows)} onLogout={onLogout} />
-      <AppStatus />
-      <Jarbas />
-      <main className="space-y-6 min-w-0">
-        {scanner.loading && !scanner.data && <Loading label="Consultando a fonte de dados..." />}
-        {scanner.error && <ErrorNotice error={scanner.error} onRetry={scanner.reload} />}
+    <AppShell activeTab={activeTab} onTab={setActiveTab} alertCount={alertCount(rows)} onLogout={onLogout}>
+      <div className="space-y-6">
+        <AppStatus />
+        <section id="jarbas" aria-label="Jarbas">
+          <Jarbas />
+        </section>
+        <main className="space-y-6 min-w-0">
+          {scanner.loading && !scanner.data && <Loading label="Consultando a fonte de dados..." />}
+          {scanner.error && <ErrorNotice error={scanner.error} onRetry={scanner.reload} />}
 
-        {scanner.data && activeTab === 'dashboard' && (
-          <Dashboard rows={rows} selected={selected} onSelect={setSelected} onOpenStrategies={openStrategies} />
-        )}
-        {scanner.data && activeTab === 'scanner' && (
-          <Scanner
-            rows={rows}
-            generatedAt={scanner.data.generated_at}
-            complete={scanner.data.complete}
-            timedOut={scanner.data.timed_out_symbols}
-            loading={scanner.loading}
-            onReload={scanner.reload}
-            onOpenStrategies={openStrategies}
-          />
-        )}
-        {scanner.data && activeTab === 'strategy' && <StrategyView symbols={symbols} symbol={selected} onSymbol={setSelected} />}
-        {scanner.data && activeTab === 'alerts' && <Alerts rows={rows} onOpenStrategies={openStrategies} />}
-        {activeTab === 'lab' && <Lab />}
-        {activeTab === 'carteira' && <Carteira />}
-      </main>
-    </div>
+          {scanner.data && activeTab === 'dashboard' && (
+            <Dashboard rows={rows} selected={selected} onSelect={setSelected} onOpenStrategies={openStrategies} />
+          )}
+          {scanner.data && activeTab === 'scanner' && (
+            <Scanner
+              rows={rows}
+              generatedAt={scanner.data.generated_at}
+              complete={scanner.data.complete}
+              timedOut={scanner.data.timed_out_symbols}
+              loading={scanner.loading}
+              onReload={scanner.reload}
+              onOpenStrategies={openStrategies}
+            />
+          )}
+          {scanner.data && activeTab === 'strategy' && <StrategyView symbols={symbols} symbol={selected} onSymbol={setSelected} />}
+          {scanner.data && activeTab === 'alerts' && <Alerts rows={rows} onOpenStrategies={openStrategies} />}
+          {activeTab === 'lab' && <Lab />}
+          {activeTab === 'carteira' && <Carteira />}
+        </main>
+      </div>
+    </AppShell>
   );
 }
