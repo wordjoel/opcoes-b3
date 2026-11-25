@@ -46,4 +46,31 @@ describe('shell Web/PWA', () => {
     expect(onTab).toHaveBeenCalledWith('lab');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+
+  it('coloca foco no drawer, prende Tab e devolve o foco ao fechar com Escape', async () => {
+    setup();
+    const bottom = screen.getByRole('navigation', { name: 'Navegação móvel inferior' });
+    const opener = within(bottom).getByRole('button', { name: 'Todos os módulos (menu inferior)' });
+    await userEvent.click(opener);
+    const drawer = screen.getByRole('dialog', { name: 'Todos os módulos' });
+    expect(document.activeElement).toBe(within(drawer).getByRole('button', { name: 'Fechar menu' }));
+
+    // Shift+Tab do primeiro botão volta ao último; Tab volta ao primeiro.
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(within(drawer).getByRole('button', { name: 'Carteira' }));
+    await userEvent.tab();
+    expect(document.activeElement).toBe(within(drawer).getByRole('button', { name: 'Fechar menu' }));
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('expõe a contagem de alertas ao leitor de tela e respeita a área segura', () => {
+    setup();
+    const sidebar = screen.getByRole('navigation', { name: 'Seções' });
+    expect(within(sidebar).getByText('2 alertas')).toBeTruthy();
+    const bottom = screen.getByRole('navigation', { name: 'Navegação móvel inferior' });
+    expect(bottom.className).toContain('pb-[env(safe-area-inset-bottom)]');
+  });
 });

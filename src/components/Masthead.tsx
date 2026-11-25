@@ -1,10 +1,11 @@
+import { type MouseEvent } from 'react';
 import { Bot, Menu } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 
 interface MastheadProps {
   title: string;
   onLogout: () => void;
-  onOpenMenu: () => void;
+  onOpenMenu: (event: MouseEvent<HTMLElement>) => void;
   onOpenJarbas: () => void;
 }
 

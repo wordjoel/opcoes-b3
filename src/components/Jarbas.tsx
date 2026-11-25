@@ -70,6 +70,8 @@ export function Jarbas() {
   const stopSpeech = useRef<() => void>(() => {});
   const recognition = useRef<Listening | null>(null);
   const list = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLButtonElement>(null);
   const loadedConversation = useRef<string | null>(null);
 
   useEffect(() => setLive(status.data), [status.data]);
@@ -110,6 +112,29 @@ export function Jarbas() {
     stopSpeech.current = () => {};
     setActivity((current) => (current === 'speaking' ? 'idle' : current));
   };
+
+  const closePanel = () => {
+    interrupt();
+    setOpen(false);
+  };
+
+  useEffect(() => {
+    if (!open) {
+      // O botão de abertura é recriado ao fechar: a ref aponta para o nó atual.
+      openerRef.current?.focus();
+      return;
+    }
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closePanel();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+    // `closePanel` muda a cada render; o ciclo de vida é o estado `open`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const notice = (content: string, attempts?: Message['attempts']) =>
     setMessages((current) => [...current, { role: 'notice', content, attempts }]);
@@ -192,6 +217,7 @@ export function Jarbas() {
   if (!open) {
     return (
       <button
+        ref={openerRef}
         onClick={() => setOpen(true)}
         className="fixed z-40 right-4 flex items-center gap-2 bg-ink text-paper border border-ink px-3 py-2 shadow-lg"
         style={{ bottom: 'max(1rem, env(safe-area-inset-bottom))' }}
@@ -205,11 +231,13 @@ export function Jarbas() {
 
   const providerText = !online
     ? 'Sem conexão: o Jarbas precisa de internet'
-    : status.loading && !live
-      ? 'Verificando...'
-      : available
-        ? `Disponível · ${live!.providers.map((p) => p.label).join(', ')}`
-        : 'Nenhum provedor de IA configurado no servidor';
+    : status.error
+      ? `Falha ao consultar status: ${status.error.message}`
+      : status.loading && !live
+        ? 'Verificando...'
+        : available
+          ? `Disponível · ${live!.providers.map((p) => p.label).join(', ')}`
+          : 'Nenhum provedor de IA configurado no servidor';
 
   return (
     <section
@@ -241,7 +269,7 @@ export function Jarbas() {
             {audio ? <Volume2 size={18} /> : <VolumeX size={18} />}
           </button>
         )}
-        <button className="p-2" onClick={() => (interrupt(), setOpen(false))} aria-label="Fechar o Jarbas">
+        <button ref={closeRef} className="p-2" onClick={closePanel} aria-label="Fechar o Jarbas">
           <X size={18} />
         </button>
       </header>

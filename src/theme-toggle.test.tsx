@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ThemeToggle } from './components/ThemeToggle';
 
 afterEach(() => {
+  cleanup();
   window.localStorage.clear();
   delete document.documentElement.dataset.theme;
   document.documentElement.style.colorScheme = '';
@@ -28,5 +29,16 @@ describe('ícone de alternância de modo', () => {
     window.localStorage.setItem('b3-opcoes-tema', 'escuro');
     render(<ThemeToggle />);
     expect(screen.getByRole('button', { name: 'Ativar modo claro' })).toBeTruthy();
+  });
+
+  it('permite voltar ao tema automático', () => {
+    render(<ThemeToggle />);
+    fireEvent.click(screen.getByRole('button', { name: 'Ativar modo escuro' }));
+    expect(screen.getByRole('button', { name: 'Usar tema automático' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Usar tema automático' }));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(window.localStorage.getItem('b3-opcoes-tema')).toBe('automatico');
+    expect(screen.queryByRole('button', { name: 'Usar tema automático' })).toBeNull();
   });
 });

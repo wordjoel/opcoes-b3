@@ -3,7 +3,7 @@
  * A navegação é adaptada por largura de tela; as telas e regras são as mesmas.
  * Cores vêm dos tokens --dp-*, então o tema claro/escuro continua funcionando.
  */
-import { type ComponentType, type ReactNode, useState } from 'react';
+import { type ComponentType, type MouseEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Bell, FlaskConical, LayoutDashboard, Layers, Menu, Radar, Wallet, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Masthead } from './Masthead';
@@ -37,11 +37,58 @@ interface AppShellProps {
 
 export function AppShell({ activeTab, onTab, alertCount, onLogout, children }: AppShellProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const current = NAV_ITEMS.find((item) => item.id === activeTab) ?? NAV_ITEMS[0];
+
+  const openDrawer = (event?: MouseEvent<HTMLElement>) => {
+    openerRef.current = event?.currentTarget ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    setDrawerOpen(true);
+  };
+
+  const closeDrawer = () => setDrawerOpen(false);
+
+  // O drawer é um diálogo modal: foco inicial, Escape e Tab preso dentro dele.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDrawer();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusables: HTMLElement[] = Array.from(
+        drawerRef.current?.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') ?? [],
+      );
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const inside = drawerRef.current?.contains(document.activeElement);
+      if (event.shiftKey && (document.activeElement === first || !inside)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !inside)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [drawerOpen]);
+
+  // Ao fechar, o foco volta para quem abriu o menu.
+  useEffect(() => {
+    if (drawerOpen) return;
+    openerRef.current?.focus();
+    openerRef.current = null;
+  }, [drawerOpen]);
 
   const select = (id: string) => {
     onTab(id);
-    setDrawerOpen(false);
+    closeDrawer();
   };
 
   const goToJarbas = () => {
@@ -84,7 +131,10 @@ export function AppShell({ activeTab, onTab, alertCount, onLogout, children }: A
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="truncate">{item.label}</span>
                 {item.id === 'alerts' && alertCount > 0 && (
-                  <span className="ml-auto" aria-label={`${alertCount} alertas`}>({alertCount})</span>
+                  <span className="ml-auto">
+                    <span className="sr-only">{alertCount} alertas</span>
+                    <span aria-hidden="true">({alertCount})</span>
+                  </span>
                 )}
               </button>
             );
@@ -99,17 +149,17 @@ export function AppShell({ activeTab, onTab, alertCount, onLogout, children }: A
         <Masthead
           title={current.label}
           onLogout={onLogout}
-          onOpenMenu={() => setDrawerOpen(true)}
+          onOpenMenu={(event) => openDrawer(event)}
           onOpenJarbas={goToJarbas}
         />
-        <div className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-4 pb-24 lg:px-8 lg:py-8 lg:pb-8">
+        <div className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-4 pb-[calc(6rem+env(safe-area-inset-bottom))] lg:px-8 lg:py-8 lg:pb-8">
           {children}
         </div>
       </div>
 
       <nav
         aria-label="Navegação móvel inferior"
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--dp-color-rule)] bg-[var(--dp-color-ground)] lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--dp-color-rule)] bg-[var(--dp-color-ground)] pb-[env(safe-area-inset-bottom)] lg:hidden"
       >
         <div className="mx-auto grid max-w-[1400px] grid-cols-5">
           {MOBILE_PRIMARY.map((id) => {
@@ -138,7 +188,7 @@ export function AppShell({ activeTab, onTab, alertCount, onLogout, children }: A
           <button
             type="button"
             aria-label="Todos os módulos (menu inferior)"
-            onClick={() => setDrawerOpen(true)}
+            onClick={openDrawer}
             className={cn(
               'flex min-h-14 flex-col items-center justify-center gap-1 border-t-2 px-1 py-1.5 font-display text-[11px]',
               drawerOpen ? 'border-[var(--dp-color-ink)]' : 'border-transparent text-[var(--dp-color-secondary)]',
@@ -151,8 +201,9 @@ export function AppShell({ activeTab, onTab, alertCount, onLogout, children }: A
       </nav>
 
       {drawerOpen && (
-        <div className="fixed inset-0 z-50 flex items-end bg-black/60 lg:hidden" onClick={() => setDrawerOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-end bg-black/60 lg:hidden" onClick={closeDrawer}>
           <div
+            ref={drawerRef}
             role="dialog"
             aria-label="Todos os módulos"
             aria-modal="true"
@@ -162,7 +213,7 @@ export function AppShell({ activeTab, onTab, alertCount, onLogout, children }: A
             <div className="mx-auto mb-4 h-1.5 w-10 rounded bg-[var(--dp-color-rule)]" />
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-xl">Todos os módulos</h2>
-              <button className="np-btn" onClick={() => setDrawerOpen(false)} aria-label="Fechar menu">
+              <button ref={closeRef} className="np-btn" onClick={closeDrawer} aria-label="Fechar menu">
                 <X className="h-4 w-4" />
               </button>
             </div>

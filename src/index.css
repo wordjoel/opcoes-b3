@@ -260,7 +260,8 @@
   }
 }
 
-@media (max-width: 1100px) {
+/* Alinhado a `lg` do Tailwind (mínimo 1024px), sem faixa de sobreposição. */
+@media (max-width: 1023.98px) {
   .np-spread {
     grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
   }
@@ -270,7 +271,8 @@
   }
 }
 
-@media (max-width: 700px) {
+/* Alinhado a `md` do Tailwind (mínimo 768px). */
+@media (max-width: 767.98px) {
   .np-spread,
   .np-spread-side {
     grid-template-columns: minmax(0, 1fr);

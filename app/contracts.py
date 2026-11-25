@@ -110,12 +110,17 @@ def provenance_view(provenance: Any = None) -> dict | None:
     """Serializa os cinco campos do `Provenance`, inclusive a idade informada pela fonte."""
     if provenance is None:
         return None
+    # A idade informada pela fonte vale quando ela existe; se não há valor explícito,
+    # o atraso é a diferença entre a coleta e o horário de mercado declarados.
+    delay = provenance.delay_seconds
+    if delay is None and provenance.collected_at and provenance.market_time:
+        delay = max(0.0, (provenance.collected_at - provenance.market_time).total_seconds())
     return {
         "source": provenance.source,
         "kind": provenance.kind.value,
         "collected_at": provenance.collected_at.isoformat(),
         "market_time": provenance.market_time.isoformat(),
-        "delay_seconds": provenance.delay_seconds,
+        "delay_seconds": delay,
     }
 
 
@@ -148,10 +153,12 @@ def dedupe(items: list[str]) -> list[str]:
 
 
 def label_from_status(status: str, kind: str | None = None, derived: bool = False, measured: str | None = None) -> DataLabel:
-    if measured in ("SIMULADO", "OBSERVADO"):
-        return measured
+    # Dado indisponível não pode ser rotulado como observado, simulado ou calculado:
+    # a ausência vem primeiro, antes de qualquer classificação de origem.
     if status == "INDISPONIVEL":
         return "INDISPONÍVEL"
+    if measured in ("SIMULADO", "OBSERVADO"):
+        return measured
     if derived:
         return "CALCULADO"
     if kind == "EOD":

@@ -1,5 +1,5 @@
 /** Jarbas IA: conversa por texto e voz, contexto da estrutura e destaque das pernas. Voz e API simuladas. */
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Jarbas } from './components/Jarbas';
@@ -181,6 +181,27 @@ describe('Jarbas IA', () => {
     });
     expect(screen.getByText(/Sem conexão: o Jarbas precisa de internet/)).toBeTruthy();
     Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+  });
+
+  it('não confunde falha de status com ausência de provedor', async () => {
+    routes['GET /api/jarbas/status'] = () => ({ status: 500, body: { detail: 'Erro interno no servidor.' } });
+    render(<Jarbas />);
+    const opener = screen.getByRole('button', { name: 'Abrir o Jarbas IA' });
+    await userEvent.click(opener);
+    expect(await screen.findByText(/Falha ao consultar status: Erro interno no servidor\./)).toBeTruthy();
+    expect(screen.queryByText(/Nenhum provedor de IA configurado/)).toBeNull();
+  });
+
+  it('abre com foco no painel e fecha com Escape devolvendo o foco', async () => {
+    render(<Jarbas />);
+    const opener = screen.getByRole('button', { name: 'Abrir o Jarbas IA' });
+    await userEvent.click(opener);
+    const dialog = await screen.findByRole('dialog', { name: 'Jarbas IA' });
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Fechar o Jarbas' }));
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // O botão é recriado ao fechar: o foco deve voltar ao nó atual, não ao nó antigo.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Abrir o Jarbas IA' }));
   });
 });
 

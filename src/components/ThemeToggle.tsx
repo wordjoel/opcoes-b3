@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { Monitor, Moon, Sun } from 'lucide-react';
 import { aplicarPreferencia, lerPreferencia, Preferencia, salvarPreferencia } from '../lib/tema';
 
 type Modo = 'claro' | 'escuro';
@@ -23,15 +23,34 @@ export function ThemeToggle() {
     aplicarPreferencia(proximo);
   };
 
+  const usarAutomatico = () => {
+    setPreferencia('automatico');
+    salvarPreferencia('automatico');
+    aplicarPreferencia('automatico');
+  };
+
   return (
-    <button
-      type="button"
-      onClick={alternar}
-      className="np-btn inline-flex items-center justify-center"
-      aria-label={`Ativar modo ${proximo}`}
-      title={`Ativar modo ${proximo}`}
-    >
-      <Icone aria-hidden="true" size={18} />
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={alternar}
+        className="np-btn inline-flex items-center justify-center"
+        aria-label={`Ativar modo ${proximo}`}
+        title={`Ativar modo ${proximo}`}
+      >
+        <Icone aria-hidden="true" size={18} />
+      </button>
+      {preferencia !== 'automatico' && (
+        <button
+          type="button"
+          onClick={usarAutomatico}
+          className="np-btn inline-flex items-center justify-center"
+          aria-label="Usar tema automático"
+          title="Usar tema automático"
+        >
+          <Monitor aria-hidden="true" size={18} />
+        </button>
+      )}
+    </>
   );
 }

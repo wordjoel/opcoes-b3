@@ -31,6 +31,34 @@ def client_from(database, ip="1.1.1.1", settings=None, provider=None, clock=lamb
     return TestClient(app, base_url="https://testserver", headers={"x-vercel-forwarded-for": ip})
 
 
+class TestCookieGuard:
+    def test_insecure_cookie_is_ignored_in_deployed_environments(self, monkeypatch):
+        monkeypatch.setenv("B3_INSECURE_COOKIE", "1")
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        for environment in ("production", "prod", "preview"):
+            monkeypatch.setenv("VERCEL_ENV", environment)
+            assert Settings.from_env().insecure_cookie is False
+
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("VERCEL_ENV", "development")
+        assert Settings.from_env().insecure_cookie is False
+
+    def test_insecure_cookie_still_works_locally(self, monkeypatch):
+        monkeypatch.setenv("B3_INSECURE_COOKIE", "1")
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        monkeypatch.delenv("VERCEL_ENV", raising=False)
+        assert Settings.from_env().insecure_cookie is True
+
+        monkeypatch.setenv("VERCEL_ENV", "development")
+        assert Settings.from_env().insecure_cookie is True
+
+    def test_flag_alone_does_not_disable_secure(self, monkeypatch):
+        monkeypatch.delenv("B3_INSECURE_COOKIE", raising=False)
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        monkeypatch.delenv("VERCEL_ENV", raising=False)
+        assert Settings.from_env().insecure_cookie is False
+
+
 class TestPassword:
     def test_production_cost_and_legacy_format(self, monkeypatch):
         monkeypatch.undo()

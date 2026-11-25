@@ -56,7 +56,7 @@ class Settings:
             password_hash=os.environ.get("APP_PASSWORD_HASH"),
             session_secret=os.environ.get("SESSION_SECRET"),
             brapi_configured=bool(os.environ.get("BRAPI_API_KEY")),
-            insecure_cookie=os.environ.get("B3_INSECURE_COOKIE") == "1",
+            insecure_cookie=os.environ.get("B3_INSECURE_COOKIE") == "1" and insecure_cookie_allowed(),
             cron_secret=os.environ.get("CRON_SECRET"),
             trust_proxy=bool(os.environ.get("VERCEL")),
         )
@@ -64,6 +64,17 @@ class Settings:
     @property
     def login_ready(self) -> bool:
         return bool(self.password_hash and self.session_secret and len(self.session_secret) >= auth.MIN_SECRET_LENGTH)
+
+
+# Ambientes implantados usam HTTPS: desligar `Secure` ali quebraria a sessão.
+DEPLOYED_ENVIRONMENTS = {"production", "prod", "preview"}
+
+
+def insecure_cookie_allowed() -> bool:
+    """`B3_INSECURE_COOKIE` só vale fora de produção e preview."""
+
+    environment = (os.environ.get("ENVIRONMENT") or os.environ.get("VERCEL_ENV") or "").strip().lower()
+    return environment not in DEPLOYED_ENVIRONMENTS
 
 
 CACHE_RETENTION = timedelta(days=7)
