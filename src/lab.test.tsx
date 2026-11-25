@@ -132,6 +132,21 @@ describe('resultados', () => {
     expect(screen.getByText('Incompleta: perna sem negócio')).toBeTruthy();
   });
 
+  it('não transforma pnl_brl nulo em zero na curva', async () => {
+    routes['GET /api/lab/strategies'] = { body: { strategies: [strategy()] } };
+    routes['GET /api/lab/strategies/abc'] = { body: { ...strategy(), marks: [
+      { day: '2026-10-08', pnl_brl: 120.5, spot: 50, prices: {}, complete: true, settlement: false, source: 'brapi', fetched_at: '' },
+      { day: '2026-10-09', pnl_brl: null, spot: 50, prices: {}, complete: true, settlement: false, source: 'brapi', fetched_at: '' },
+    ] } };
+    render(<Lab />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Simulação histórica' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Abrir PETR4/ }));
+    const chart = await screen.findByRole('img', { name: /Evolução hipotética do payoff: 1 pregões/ });
+    const label = chart.getAttribute('aria-label')!.replace(/\u00a0/g, ' ');
+    expect(label).toContain('R$ 120,50');
+    expect(label).not.toContain('R$ 0,00');
+  });
+
   it('acompanhamento usa o rótulo observado, e sem marcação não há resultado', async () => {
     const forward = strategy({ mode: 'FORWARD', status: 'ATIVA', close_reason: null, pnl_brl: null, return_on_capital: null, return_on_risk: null, returns: { potential: 1.5, theoretical: -0.02, measured_label: 'OBSERVADO', measured: null } });
     routes['GET /api/lab/strategies'] = { body: { strategies: [forward] } };

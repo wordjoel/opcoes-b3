@@ -12,6 +12,9 @@ interface Message {
   model?: string | null;
   latency_ms?: number;
   attempts?: { provider: string; error: string | null }[];
+  specialists?: string[];
+  plan?: string[];
+  tool_details?: { name: string; ok: boolean; attempts: string[] }[];
 }
 
 type View = 'chat' | 'history' | 'settings';
@@ -58,7 +61,7 @@ function JarbasAvatar({ active, activity = 'idle' }: { active: boolean; activity
 export function Jarbas() {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>('chat');
-  const { context } = useJarbasState();
+  const { context, focusRequest } = useJarbasState();
   const status = useResource(open ? 'jarbas-status' : null, api.jarbasStatus);
   const [live, setLive] = useState<JarbasStatus | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(() => readKey(CONVERSATION_KEY));
@@ -70,9 +73,13 @@ export function Jarbas() {
   const stopSpeech = useRef<() => void>(() => {});
   const recognition = useRef<Listening | null>(null);
   const list = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const openerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const focusSourceRef = useRef<HTMLElement | null>(null);
   const loadedConversation = useRef<string | null>(null);
+  const handledFocus = useRef(focusRequest);
 
   useEffect(() => setLive(status.data), [status.data]);
   useEffect(() => {
@@ -85,7 +92,15 @@ export function Jarbas() {
     loadedConversation.current = conversationId;
     api
       .jarbasConversation(conversationId)
-      .then((found) => setMessages(found.messages.map((m) => ({ role: m.role, content: m.content, provider: m.provider, model: m.model }))))
+      .then((found) => setMessages(found.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        provider: m.provider,
+        model: m.model,
+        specialists: m.specialists,
+        plan: m.plan,
+        tool_details: m.tool_details,
+      }))))
       .catch(() => setConversationId(null));
   }, [open, conversationId]);
   useEffect(() => {
@@ -101,6 +116,18 @@ export function Jarbas() {
     };
   }, []);
   useEffect(() => () => stopSpeech.current(), []);
+
+  // O shell e o painel de estratégias podem pedir o Jarbas em foco.
+  useEffect(() => {
+    if (focusRequest === handledFocus.current) return;
+    handledFocus.current = focusRequest;
+    // O pedido de foco pode vir do shell ou de uma tela: guarda quem estava em foco.
+    if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+      focusSourceRef.current = document.activeElement;
+    }
+    setOpen(true);
+    setView('chat');
+  }, [focusRequest]);
 
   const available = live?.available ?? false;
   const busy = activity === 'thinking';
@@ -121,14 +148,37 @@ export function Jarbas() {
   useEffect(() => {
     if (!open) {
       // O botão de abertura é recriado ao fechar: a ref aponta para o nó atual.
-      openerRef.current?.focus();
+      const source = focusSourceRef.current;
+      const target = source?.isConnected ? source : openerRef.current;
+      if (target?.isConnected) target.focus();
+      focusSourceRef.current = null;
       return;
     }
     closeRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      closePanel();
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePanel();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusables: HTMLElement[] = [];
+      panelRef.current
+        ?.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+        .forEach((element: HTMLElement) => {
+          if (!element.hasAttribute('disabled')) focusables.push(element);
+        });
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const inside = panelRef.current?.contains(document.activeElement);
+      if (event.shiftKey && (document.activeElement === first || !inside)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !inside)) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -161,6 +211,9 @@ export function Jarbas() {
           model: answer.model,
           latency_ms: answer.latency_ms,
           attempts: answer.attempts,
+          specialists: answer.specialists,
+          plan: answer.plan,
+          tool_details: answer.tool_details,
         },
       ]);
       setLive((current) => (current ? { ...current, usage: { ...current.usage, questions: answer.usage.questions, daily_limit: answer.usage.daily_limit } } : current));
@@ -218,7 +271,10 @@ export function Jarbas() {
     return (
       <button
         ref={openerRef}
-        onClick={() => setOpen(true)}
+        onClick={(event) => {
+          openerRef.current = event.currentTarget;
+          setOpen(true);
+        }}
         className="fixed z-40 right-4 flex items-center gap-2 bg-ink text-paper border border-ink px-3 py-2 shadow-lg"
         style={{ bottom: 'max(1rem, env(safe-area-inset-bottom))' }}
         aria-label="Abrir o Jarbas IA"
@@ -241,8 +297,10 @@ export function Jarbas() {
 
   return (
     <section
+      ref={panelRef}
       role="dialog"
       aria-label="Jarbas IA"
+      aria-modal="true"
       className="fixed z-40 inset-x-0 bottom-0 md:inset-x-auto md:right-4 md:bottom-4 md:w-[420px] bg-paper border border-ink shadow-2xl flex flex-col max-h-[88vh] md:max-h-[680px]"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
@@ -338,6 +396,23 @@ export function Jarbas() {
                     </ul>
                   </details>
                 )}
+                {(message.specialists?.length || message.plan?.length || message.tool_details?.length) && (
+                  <details className="font-display text-[10px] text-ink-2 mt-0.5 text-left">
+                    <summary>Especialistas e etapas</summary>
+                    {message.specialists && message.specialists.length > 0 && <p>Especialistas: {message.specialists.join(', ')}</p>}
+                    {message.plan && message.plan.length > 0 && <p>Plano: {message.plan.join(' → ')}</p>}
+                    {message.tool_details && message.tool_details.length > 0 && (
+                      <ul>
+                        {message.tool_details.map((item, index) => (
+                          <li key={`${item.name}-${index}`}>
+                            {item.name}: {item.ok ? 'ok' : 'falhou'}
+                            {item.attempts.length > 0 ? ` (${item.attempts.join(', ')})` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </details>
+                )}
               </div>
             ))}
             {busy && <p className="np-note">{ACTIVITY_LABEL.thinking}</p>}
@@ -369,6 +444,7 @@ export function Jarbas() {
               </button>
             )}
             <input
+              ref={inputRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               placeholder={activity === 'listening' ? 'Ouvindo...' : 'Pergunte ao Jarbas'}

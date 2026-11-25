@@ -92,7 +92,21 @@ def add_message(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     latency_ms: int | None = None,
+    metadata: dict | None = None,
 ) -> None:
+    """Grava uma mensagem. `metadata` acrescenta campos ao JSON de ferramentas.
+
+    O formato antigo era uma lista de nomes; o novo é um objeto com `tools` e
+    metadados aditivos. As duas formas são lidas por `get_conversation`, então
+    conversas antigas continuam abrindo normalmente.
+    """
+    payload: dict | None = None
+    if metadata:
+        payload = dict(metadata)
+        if tools:
+            payload.setdefault("tools", tools)
+    elif tools:
+        payload = {"tools": tools}
     db.run(
         "INSERT INTO jarbas_messages (conversation_id, role, content, provider, model, context_json, tools_json, prompt_tokens, completion_tokens, latency_ms, created_at)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -103,13 +117,49 @@ def add_message(
             provider,
             model,
             json.dumps(context, ensure_ascii=False) if context else None,
-            json.dumps(tools, ensure_ascii=False) if tools else None,
+            json.dumps(payload, ensure_ascii=False) if payload else None,
             prompt_tokens,
             completion_tokens,
             latency_ms,
             now.isoformat(),
         ),
     )
+
+
+def _message_metadata(raw: object) -> dict:
+    """Lê tools_json sem confiar no formato gravado por versões anteriores."""
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if isinstance(parsed, list):
+        return {"tools": parsed}
+    if not isinstance(parsed, dict):
+        return {}
+    metadata: dict = {}
+    tools = parsed.get("tools")
+    if isinstance(tools, list):
+        metadata["tools"] = [item for item in tools if isinstance(item, str)]
+    specialists = parsed.get("specialists")
+    if isinstance(specialists, list):
+        metadata["specialists"] = [item for item in specialists if isinstance(item, str)]
+    plan = parsed.get("plan")
+    if isinstance(plan, list):
+        metadata["plan"] = [item for item in plan if isinstance(item, str)]
+    details = parsed.get("tool_details")
+    if isinstance(details, list):
+        metadata["tool_details"] = [
+            {
+                "name": str(item.get("name", "")),
+                "ok": bool(item.get("ok")),
+                "attempts": [str(value) for value in item.get("attempts", [])] if isinstance(item.get("attempts"), list) else [],
+            }
+            for item in details
+            if isinstance(item, dict)
+        ]
+    return metadata
 
 
 def list_conversations(db: Database, limit: int = 50) -> list[dict]:
@@ -126,7 +176,7 @@ def get_conversation(db: Database, identity: str) -> dict | None:
     if not head:
         return None
     rows = db.fetch(
-        "SELECT role, content, provider, model, created_at FROM jarbas_messages WHERE conversation_id = ? ORDER BY id",
+        "SELECT role, content, provider, model, created_at, tools_json FROM jarbas_messages WHERE conversation_id = ? ORDER BY id",
         (identity,),
     )
     return {
@@ -134,7 +184,17 @@ def get_conversation(db: Database, identity: str) -> dict | None:
         "title": head[0][1],
         "created_at": head[0][2],
         "updated_at": head[0][3],
-        "messages": [{"role": r[0], "content": r[1], "provider": r[2], "model": r[3], "created_at": r[4]} for r in rows],
+        "messages": [
+            {
+                "role": r[0],
+                "content": r[1],
+                "provider": r[2],
+                "model": r[3],
+                "created_at": r[4],
+                **_message_metadata(r[5]),
+            }
+            for r in rows
+        ],
     }
 
 

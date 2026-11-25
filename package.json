@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@remotion/player": "^4.0.547",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "clsx": "^2.1.1",
@@ -20,6 +21,7 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "recharts": "^3.8.1",
+    "remotion": "^4.0.547",
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {

@@ -49,9 +49,11 @@ interface State {
   context: JarbasContext | null;
   /** Índice na ordem de montagem (compras primeiro), ou null. */
   highlight: number | null;
+  /** Contador de pedidos de abertura/foco vindos de outras seções do app. */
+  focusRequest: number;
 }
 
-let state: State = { context: null, highlight: null };
+let state: State = { context: null, highlight: null, focusRequest: 0 };
 const listeners = new Set<() => void>();
 let tour: ReturnType<typeof setTimeout>[] = [];
 
@@ -68,6 +70,11 @@ export function setJarbasContext(context: JarbasContext | null) {
 
 export function setHighlight(highlight: number | null) {
   emit({ highlight });
+}
+
+/** Abre o Jarbas e pede foco no campo de pergunta. Usado pelo Dashboard e pelo shell. */
+export function requestJarbasFocus() {
+  emit({ focusRequest: state.focusRequest + 1 });
 }
 
 export function stopTour() {
